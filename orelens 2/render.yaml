@@ -1,0 +1,34 @@
+# One-click deploy blueprint for Render.com
+# In Render: New + -> Blueprint -> point at this repo. That's it.
+databases:
+  - name: orelens-db
+    plan: free
+
+services:
+  - type: web
+    name: orelens-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: orelens-db
+          property: connectionString
+      - key: SEED_ON_START
+        value: "1"          # loads the demo universe on first boot; set to 0 later
+      - key: FMP_API_KEY
+        sync: false          # add your key in the Render dashboard when ready
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  - type: web
+    name: orelens-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://orelens-api.onrender.com   # update if Render assigns a different API URL

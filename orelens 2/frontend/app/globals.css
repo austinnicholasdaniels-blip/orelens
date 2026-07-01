@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { @apply bg-shale text-bone font-body antialiased; }
+
+/* stamped assay-tag treatment for grade marks */
+.assay-stamp {
+  @apply font-display tracking-widest border-2 rounded-sm px-2 leading-none inline-flex items-center justify-center;
+  transform: rotate(-2deg);
+}
+
+table.core-tray th {
+  @apply text-left text-xs uppercase tracking-widest text-ash font-body font-medium py-2 px-3 border-b border-seam;
+}
+table.core-tray td { @apply py-2.5 px-3 border-b border-seam/60 text-sm; }
+table.core-tray tr:hover td { @apply bg-tray; }
