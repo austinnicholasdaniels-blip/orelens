@@ -1,20 +1,19 @@
 import type { Config } from "tailwindcss";
 
-// Assay-lab palette: shale ground, core-tray surfaces, assay-gold accent,
-// oxide teal for constructive states, hazard red for D/F risk.
+// White-gloss palette: bright surfaces, grey body text, blue accent.
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        shale: "#101312",
-        tray: "#1A1E1C",
-        seam: "#2A302D",
-        bone: "#E9E4D8",
-        ash: "#8D958F",
-        assay: "#E8B44A",
-        oxide: "#58B09C",
-        hazard: "#D4574E",
+        shale: "#F5F7FA",
+        tray: "#FFFFFF",
+        seam: "#DDE3EA",
+        bone: "#3A4452",
+        ash: "#8A94A4",
+        assay: "#2563EB",
+        oxide: "#0E9F6E",
+        hazard: "#DC2626",
       },
       fontFamily: {
         display: ["'Barlow Condensed'", "ui-sans-serif", "sans-serif"],
