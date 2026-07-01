@@ -13,6 +13,7 @@ from . import models
 from .jobs.nightly import run_nightly
 from .services import scanners
 from .services.drill_parser import percentile_rank
+from . import universe as universe_module
 
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app = FastAPI(title="OreLens API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+app.include_router(universe_module.router)
 
 
 @app.get("/api/scanners/active-drills")
