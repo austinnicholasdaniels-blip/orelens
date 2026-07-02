@@ -4,29 +4,28 @@ Real junior-mining universe + loader.
 POST /api/admin/load-universe
   1. Removes the fictional demo companies (and all their child rows)
   2. Upserts the real universe below
-  3. For each ticker, pulls current quote (shares outstanding) and ~120 days
-     of daily price history from FMP so charts are populated immediately
+  3. For each ticker, pulls shares outstanding, ~6 months of daily price
+     history, and quarterly cash/burn from Yahoo Finance (free, unofficial)
 
 Notes:
 - Financial snapshots (cash / burn) and warrant tables are NOT invented here.
   Grades stay empty until real filing data is loaded — placeholder numbers
   would produce misleading grades.
 - Tickers verified against knowledge as of early 2026; delistings/takeovers
-  can happen any time. A failed FMP lookup is logged and skipped, not fatal.
+  can happen any time. A failed lookup is logged and skipped, not fatal.
 """
 from __future__ import annotations
 import logging
 from datetime import date, datetime
 
-import httpx
 from fastapi import APIRouter, Depends
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from . import models
-from .config import settings
-from .services.ingest import fmp_symbol
+from .services import yahoo
 
 log = logging.getLogger("orelens.universe")
 router = APIRouter()
@@ -87,28 +86,6 @@ UNIVERSE = [
     ("GT1",  "ASX",  "Green Technology Metals","Lithium","Ontario, Canada",      "Tier 1", "Seymour"),
 ]
 
-FMP = "https://financialmodelingprep.com/api/v3"
-
-
-async def _fetch_quote_and_history(client: httpx.AsyncClient, ticker: str, exchange: str):
-    sym = fmp_symbol(ticker, exchange)
-    quote, history = None, []
-    try:
-        r = await client.get(f"{FMP}/quote/{sym}", params={"apikey": settings.fmp_api_key})
-        rows = r.json() if r.status_code == 200 else []
-        quote = rows[0] if rows else None
-    except Exception as exc:  # noqa: BLE001
-        log.error("quote %s failed: %s", sym, exc)
-    try:
-        r = await client.get(f"{FMP}/historical-price-full/{sym}",
-                             params={"apikey": settings.fmp_api_key, "timeseries": 120})
-        data = r.json() if r.status_code == 200 else {}
-        history = data.get("historical", []) or []
-    except Exception as exc:  # noqa: BLE001
-        log.error("history %s failed: %s", sym, exc)
-    return quote, history
-
-
 def _purge_companies(db: Session, tickers: list[str]) -> int:
     ids = db.execute(
         select(models.Company.id).where(models.Company.ticker.in_(tickers))
@@ -128,42 +105,50 @@ async def load_universe(db: Session = Depends(get_db)):
     removed = _purge_companies(db, DEMO_TICKERS)
     db.commit()
 
-    added, priced, failed = [], [], []
-    async with httpx.AsyncClient(timeout=25) as client:
-        for (tick, exch, name, comm, juris, tier, proj) in UNIVERSE:
-            c = db.execute(select(models.Company).where(
-                models.Company.ticker == tick)).scalar_one_or_none()
-            if not c:
-                c = models.Company(ticker=tick, exchange=exch, name=name,
-                                   commodity=comm, jurisdiction=juris,
-                                   jurisdiction_tier=tier, project_name=proj,
-                                   shares_outstanding=0)
-                db.add(c)
-                db.flush()
-                added.append(tick)
+    added, priced, financials, failed = [], [], [], []
+    for (tick, exch, name, comm, juris, tier, proj) in UNIVERSE:
+        c = db.execute(select(models.Company).where(
+            models.Company.ticker == tick)).scalar_one_or_none()
+        if not c:
+            c = models.Company(ticker=tick, exchange=exch, name=name,
+                               commodity=comm, jurisdiction=juris,
+                               jurisdiction_tier=tier, project_name=proj,
+                               shares_outstanding=0)
+            db.add(c)
+            db.flush()
+            added.append(tick)
 
-            if not settings.fmp_api_key:
-                db.commit()
-                continue
-            quote, history = await _fetch_quote_and_history(client, tick, exch)
-            if quote and quote.get("sharesOutstanding"):
-                c.shares_outstanding = quote["sharesOutstanding"]
-            if history:
-                have = {p.day for p in db.execute(select(models.DailyPrice).where(
-                    models.DailyPrice.company_id == c.id)).scalars()}
-                for row in history:
-                    d = datetime.strptime(row["date"], "%Y-%m-%d").date()
-                    if d in have or row.get("close") is None:
-                        continue
-                    db.add(models.DailyPrice(company_id=c.id, day=d,
-                                             close=row["close"],
-                                             volume=row.get("volume") or 0))
-                priced.append(tick)
-            elif quote is None:
-                failed.append(tick)
-            db.commit()
+        data = await run_in_threadpool(yahoo.fetch_company_data, tick, exch)
+        if data["shares_outstanding"]:
+            c.shares_outstanding = data["shares_outstanding"]
+        if data["prices"]:
+            have = {p.day for p in db.execute(select(models.DailyPrice).where(
+                models.DailyPrice.company_id == c.id)).scalars()}
+            for row in data["prices"]:
+                if row["date"] in have:
+                    continue
+                db.add(models.DailyPrice(company_id=c.id, day=row["date"],
+                                         close=row["close"],
+                                         volume=row["volume"]))
+            priced.append(tick)
+        else:
+            failed.append(tick)
+        if data["cash"] and data["monthly_burn"]:
+            existing_fin = db.execute(select(models.FinancialSnapshot).where(
+                models.FinancialSnapshot.company_id == c.id)).scalars().first()
+            if not existing_fin:
+                db.add(models.FinancialSnapshot(
+                    company_id=c.id, as_of=date.today(),
+                    cash=data["cash"], monthly_burn=data["monthly_burn"],
+                    source_filing="Yahoo Finance quarterly statements"))
+                financials.append(tick)
+        db.commit()
+
+    # compute dilution grades for anything that now has price + financials
+    from .jobs.nightly import run_grades
+    run_grades(db)
 
     return {"demo_companies_removed": removed, "companies_added": added,
-            "price_history_loaded": priced, "fmp_lookup_failed": failed,
+            "price_history_loaded": priced, "financials_loaded": financials,
+            "lookup_failed": failed,
             "universe_size": len(UNIVERSE)}
-
