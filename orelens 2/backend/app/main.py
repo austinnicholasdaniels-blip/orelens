@@ -14,6 +14,7 @@ from .jobs.nightly import run_nightly
 from .services import scanners
 from .services.drill_parser import percentile_rank
 from . import universe as universe_module
+from . import features as features_module
 
 
 @asynccontextmanager
@@ -42,6 +43,7 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 app.include_router(universe_module.router)
+app.include_router(features_module.router)
 
 
 @app.get("/api/scanners/active-drills")
