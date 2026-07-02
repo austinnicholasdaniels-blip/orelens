@@ -141,6 +141,13 @@ async def load_universe(db: Session = Depends(get_db)):
             priced.append(tick)
         else:
             failed.append(tick)
+        for sh in data.get("shares_history", []):
+            exists_sh = db.execute(select(models.SharesHistory).where(
+                models.SharesHistory.company_id == c.id,
+                models.SharesHistory.as_of == sh["as_of"])).scalar_one_or_none()
+            if not exists_sh:
+                db.add(models.SharesHistory(company_id=c.id,
+                                            as_of=sh["as_of"], shares=sh["shares"]))
         if data["cash"] and data["monthly_burn"]:
             existing_fin = db.execute(select(models.FinancialSnapshot).where(
                 models.FinancialSnapshot.company_id == c.id)).scalars().first()
