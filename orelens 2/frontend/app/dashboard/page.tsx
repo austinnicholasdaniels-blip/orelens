@@ -7,6 +7,8 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type Row = Record<string, any>;
 const TABS = [
+  { id: "all-stocks", label: "All Stocks" },
+  { id: "news", label: "News" },
   { id: "value-momentum", label: "Best Bang-for-Buck" },
   { id: "most-dilutive", label: "Most Dilutive" },
   { id: "active-drills", label: "Active Drill Programs" },
@@ -17,6 +19,16 @@ const COMMODITIES = ["Gold", "Silver", "Copper", "Nickel", "Lithium"];
 const TIERS = ["Tier 1", "High Risk"];
 
 const COLUMNS: Record<string, { key: string; label: string }[]> = {
+  "all-stocks": [
+    { key: "ticker", label: "Ticker" }, { key: "name", label: "Company" },
+    { key: "price", label: "Price" }, { key: "change_pct", label: "Day %" },
+    { key: "volume", label: "Volume" }, { key: "commodity", label: "Commodity" },
+    { key: "grade", label: "Grade" },
+  ],
+  "news": [
+    { key: "published", label: "Published" }, { key: "ticker", label: "Ticker" },
+    { key: "headline", label: "Headline" }, { key: "wire", label: "Wire" },
+  ],
   "value-momentum": [
     { key: "ticker", label: "Ticker" }, { key: "score", label: "Score" },
     { key: "ev_per_oz", label: "EV/oz" }, { key: "factors", label: "Factors" },
@@ -41,13 +53,14 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 const EMPTY: Record<string, string> = {
+  "news": "No press releases collected yet today. The wire sync runs nightly at 11 PM ET - or trigger it any time via POST /api/jobs/nightly.",
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
   "active-drills": "No companies with drill-start news in the last 45 days. This fills as the nightly news sync runs.",
   "high-grade-breakouts": "No benchmark-beating intercepts with volume breakouts recently. These are rare by design.",
 };
 
 export default function Dashboard() {
-  const [tab, setTab] = useState<string>("value-momentum");
+  const [tab, setTab] = useState<string>("all-stocks");
   const [commodity, setCommodity] = useState("");
   const [tier, setTier] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
@@ -177,9 +190,23 @@ export default function Dashboard() {
               {cols.map((c) => (
                 <td key={c.key} className={c.key === "ticker" ? "font-mono" : ""}>
                   {c.key === "ticker" ? (
-                    <a href={`/ticker/${r.ticker}`} className="text-assay hover:underline">
-                      {r.ticker}<span className="text-ash text-xs">.{r.exchange}</span>
+                    r.ticker ? (
+                      <a href={`/ticker/${r.ticker}`} className="text-assay hover:underline">
+                        {r.ticker}<span className="text-ash text-xs">.{r.exchange}</span>
+                      </a>
+                    ) : (<span className="text-ash">-</span>)
+                  ) : c.key === "change_pct" ? (
+                    <span className={r.change_pct == null ? "text-ash" : r.change_pct >= 0 ? "text-oxide" : "text-hazard"}>
+                      {r.change_pct == null ? "-" : (r.change_pct > 0 ? "+" : "") + r.change_pct + "%"}
+                    </span>
+                  ) : c.key === "headline" ? (
+                    <a href={r.url} target="_blank" rel="noopener noreferrer" className="hover:text-assay hover:underline">
+                      {r.headline}{r.drill_start ? " \u26cf" : ""}
                     </a>
+                  ) : c.key === "published" ? (
+                    <span className="text-xs text-ash font-mono">{(r.published ?? "").slice(0, 16).replace("T", " ")}</span>
+                  ) : c.key === "volume" ? (
+                    <span className="font-mono">{(r.volume ?? 0).toLocaleString()}</span>
                   ) : c.key === "grade" ? (
                     <GradeChip grade={r.grade} />
                   ) : c.key === "why" ? (
