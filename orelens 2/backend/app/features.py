@@ -235,3 +235,61 @@ def most_dilutive(commodity: str | None = None, tier: str | None = None,
         })
     out.sort(key=lambda x: -x["qoq_pct"])
     return out
+
+
+# ------------------------------------------------- all-stocks market board
+@router.get("/api/scanners/all-stocks")
+def all_stocks(commodity: str | None = None, tier: str | None = None,
+               db: Session = Depends(get_db)):
+    """Every tracked company with its latest price and day-over-day change."""
+    out = []
+    for c in db.execute(select(models.Company)).scalars():
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        px = db.execute(select(models.DailyPrice).where(
+            models.DailyPrice.company_id == c.id)
+            .order_by(_desc(models.DailyPrice.day)).limit(2)).scalars().all()
+        if not px:
+            continue
+        last = px[0]
+        change = (round(100 * (last.close - px[1].close) / px[1].close, 1)
+                  if len(px) > 1 and px[1].close else None)
+        g = db.execute(select(models.DilutionGrade).where(
+            models.DilutionGrade.company_id == c.id)
+            .order_by(_desc(models.DilutionGrade.day)).limit(1)).scalar_one_or_none()
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "price": round(last.close, 2), "change_pct": change,
+            "volume": int(last.volume or 0), "as_of": last.day.isoformat(),
+            "grade": g.grade if g else None,
+        })
+    out.sort(key=lambda x: -(x["change_pct"] if x["change_pct"] is not None else -999))
+    return out
+
+
+# ------------------------------------------------- press-release feed
+@router.get("/api/scanners/news")
+def news_feed(commodity: str | None = None, tier: str | None = None,
+              db: Session = Depends(get_db)):
+    """Latest mining press releases from the nightly wire sync, newest first."""
+    rows = db.execute(select(models.PressRelease)
+                      .order_by(_desc(models.PressRelease.published))
+                      .limit(150)).scalars().all()
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+    out = []
+    for r in rows:
+        c = companies.get(r.company_id)
+        if commodity and (not c or c.commodity != commodity):
+            continue
+        if tier and (not c or c.jurisdiction_tier != tier):
+            continue
+        out.append({
+            "published": r.published.isoformat() if r.published else None,
+            "ticker": c.ticker if c else None,
+            "exchange": c.exchange if c else None,
+            "headline": r.headline, "url": r.url, "wire": r.wire,
+            "drill_start": bool(r.is_drill_start),
+        })
+    return out[:100]
