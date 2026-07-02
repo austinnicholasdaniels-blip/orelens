@@ -8,6 +8,7 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type Row = Record<string, any>;
 const TABS = [
   { id: "value-momentum", label: "Best Bang-for-Buck" },
+  { id: "most-dilutive", label: "Most Dilutive" },
   { id: "active-drills", label: "Active Drill Programs" },
   { id: "high-grade-breakouts", label: "High-Grade Breakouts" },
 ] as const;
@@ -20,6 +21,11 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "ticker", label: "Ticker" }, { key: "score", label: "Score" },
     { key: "ev_per_oz", label: "EV/oz" }, { key: "factors", label: "Factors" },
     { key: "runway_m", label: "Runway (mo)" }, { key: "grade", label: "Grade" },
+  ],
+  "most-dilutive": [
+    { key: "ticker", label: "Ticker" }, { key: "grade", label: "Grade" },
+    { key: "runway_m", label: "Runway (mo)" }, { key: "overhang_pct", label: "Overhang %" },
+    { key: "shares_growth_pct", label: "Share Growth %" }, { key: "why", label: "Why" },
   ],
   "active-drills": [
     { key: "ticker", label: "Ticker" }, { key: "project", label: "Project" },
@@ -35,6 +41,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 const EMPTY: Record<string, string> = {
+  "most-dilutive": "No C/D/F-graded companies right now. Grades sharpen as filings and warrant data load per company.",
   "active-drills": "No companies with drill-start news in the last 45 days. This fills as the nightly news sync runs.",
   "high-grade-breakouts": "No benchmark-beating intercepts with volume breakouts recently. These are rare by design.",
 };
@@ -175,6 +182,8 @@ export default function Dashboard() {
                     </a>
                   ) : c.key === "grade" ? (
                     <GradeChip grade={r.grade} />
+                  ) : c.key === "why" ? (
+                    <span className="text-xs text-ash">{r.why}</span>
                   ) : c.key === "factors" ? (
                     <span className="text-xs text-ash">{(r.factors ?? []).join(" - ")}</span>
                   ) : (
