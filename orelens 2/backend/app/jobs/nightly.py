@@ -26,9 +26,14 @@ log = logging.getLogger("orelens.nightly")
 
 
 async def sync_prices(db: Session) -> None:
+    from starlette.concurrency import run_in_threadpool
+    from ..services import yahoo
     for c in db.execute(select(Company)).scalars():
-        quote = await ingest.fetch_daily_quote(c.ticker, c.exchange)
-        if not quote or quote["close"] is None:
+        data = await run_in_threadpool(yahoo.fetch_company_data, c.ticker, c.exchange, "5d")
+        last = data["prices"][-1] if data["prices"] else None
+        quote = {"close": last["close"], "volume": last["volume"],
+                 "shares_outstanding": data["shares_outstanding"]} if last else None
+        if not quote:
             continue
         exists = db.execute(
             select(DailyPrice).where(DailyPrice.company_id == c.id,
