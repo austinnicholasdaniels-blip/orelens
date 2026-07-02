@@ -33,7 +33,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 export default function Dashboard() {
-  const [tab, setTab] = useState<string>(TABS[0].id);
+  const [tab, setTab] = useState<string>("value-momentum");
   const [commodity, setCommodity] = useState("");
   const [tier, setTier] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
