@@ -1,75 +1,3 @@
-
-
-# --------------------------------------------------------------------------
-# Warrant / option tranche entry
-# --------------------------------------------------------------------------
-from pydantic import BaseModel, Field
-
-
-class TrancheBody(BaseModel):
-    strike: float = Field(gt=0)
-    expiry: str                      # YYYY-MM-DD
-    quantity: float = Field(gt=0)
-    kind: str = "warrant"            # warrant | option
-    hold_unlock: str | None = None   # YYYY-MM-DD, for recent PP 4-month holds
-
-
-class WarrantsBody(BaseModel):
-    tranches: list[TrancheBody]
-    replace: bool = True             # replace existing tranches for this ticker
-    source: str = "manual entry"     # cite the filing, e.g. "MD&A Mar 31 2026"
-
-
-def _d(s: str | None):
-    return datetime.strptime(s, "%Y-%m-%d").date() if s else None
-
-
-@router.get("/api/admin/warrants/{ticker}")
-def get_warrants(ticker: str, db: Session = Depends(get_db)):
-    c = db.execute(select(models.Company).where(
-        models.Company.ticker == ticker.upper())).scalar_one_or_none()
-    if not c:
-        return {"error": "unknown ticker"}
-    rows = db.execute(select(models.WarrantTranche).where(
-        models.WarrantTranche.company_id == c.id).order_by(
-        models.WarrantTranche.strike)).scalars().all()
-    return [{"strike": w.strike, "expiry": w.expiry.isoformat(),
-             "quantity": w.quantity, "kind": w.kind,
-             "hold_unlock": w.hold_unlock and w.hold_unlock.isoformat(),
-             "source": w.source_filing} for w in rows]
-
-
-@router.post("/api/admin/warrants/{ticker}")
-def set_warrants(ticker: str, body: WarrantsBody, db: Session = Depends(get_db)):
-    """Store warrant/option tranches for a ticker and re-grade it immediately.
-    Enter data straight from the company's latest MD&A / FS — cite it in
-    the source field so every number is traceable."""
-    c = db.execute(select(models.Company).where(
-        models.Company.ticker == ticker.upper())).scalar_one_or_none()
-    if not c:
-        return {"error": "unknown ticker"}
-
-    if body.replace:
-        db.execute(delete(models.WarrantTranche).where(
-            models.WarrantTranche.company_id == c.id))
-    for t in body.tranches:
-        db.add(models.WarrantTranche(
-            company_id=c.id, kind=t.kind, strike=t.strike,
-            expiry=_d(t.expiry), quantity=t.quantity,
-            hold_unlock=_d(t.hold_unlock), source_filing=body.source[:240]))
-    db.commit()
-
-    from .jobs.nightly import run_grades
-    run_grades(db)
-
-    g = db.execute(select(models.DilutionGrade).where(
-        models.DilutionGrade.company_id == c.id).order_by(
-        models.DilutionGrade.day.desc())).scalars().first()
-    return {"ticker": c.ticker, "tranches_stored": len(body.tranches),
-            "new_grade": g and {"grade": g.grade,
-                                "overhang_pct_float": round(g.overhang_ratio * 100, 1),
-                                "itm_warrant_cash": g.itm_warrant_cash,
-                                "rationale": g.rationale}}
 """
 Real junior-mining universe + loader.
 
@@ -224,3 +152,75 @@ async def load_universe(db: Session = Depends(get_db)):
             "price_history_loaded": priced, "financials_loaded": financials,
             "lookup_failed": failed,
             "universe_size": len(UNIVERSE)}
+
+
+# --------------------------------------------------------------------------
+# Warrant / option tranche entry
+# --------------------------------------------------------------------------
+from pydantic import BaseModel, Field
+
+
+class TrancheBody(BaseModel):
+    strike: float = Field(gt=0)
+    expiry: str                      # YYYY-MM-DD
+    quantity: float = Field(gt=0)
+    kind: str = "warrant"            # warrant | option
+    hold_unlock: str | None = None   # YYYY-MM-DD, for recent PP 4-month holds
+
+
+class WarrantsBody(BaseModel):
+    tranches: list[TrancheBody]
+    replace: bool = True             # replace existing tranches for this ticker
+    source: str = "manual entry"     # cite the filing, e.g. "MD&A Mar 31 2026"
+
+
+def _d(s: str | None):
+    return datetime.strptime(s, "%Y-%m-%d").date() if s else None
+
+
+@router.get("/api/admin/warrants/{ticker}")
+def get_warrants(ticker: str, db: Session = Depends(get_db)):
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == ticker.upper())).scalar_one_or_none()
+    if not c:
+        return {"error": "unknown ticker"}
+    rows = db.execute(select(models.WarrantTranche).where(
+        models.WarrantTranche.company_id == c.id).order_by(
+        models.WarrantTranche.strike)).scalars().all()
+    return [{"strike": w.strike, "expiry": w.expiry.isoformat(),
+             "quantity": w.quantity, "kind": w.kind,
+             "hold_unlock": w.hold_unlock and w.hold_unlock.isoformat(),
+             "source": w.source_filing} for w in rows]
+
+
+@router.post("/api/admin/warrants/{ticker}")
+def set_warrants(ticker: str, body: WarrantsBody, db: Session = Depends(get_db)):
+    """Store warrant/option tranches for a ticker and re-grade it immediately.
+    Enter data straight from the company's latest MD&A / FS — cite it in
+    the source field so every number is traceable."""
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == ticker.upper())).scalar_one_or_none()
+    if not c:
+        return {"error": "unknown ticker"}
+
+    if body.replace:
+        db.execute(delete(models.WarrantTranche).where(
+            models.WarrantTranche.company_id == c.id))
+    for t in body.tranches:
+        db.add(models.WarrantTranche(
+            company_id=c.id, kind=t.kind, strike=t.strike,
+            expiry=_d(t.expiry), quantity=t.quantity,
+            hold_unlock=_d(t.hold_unlock), source_filing=body.source[:240]))
+    db.commit()
+
+    from .jobs.nightly import run_grades
+    run_grades(db)
+
+    g = db.execute(select(models.DilutionGrade).where(
+        models.DilutionGrade.company_id == c.id).order_by(
+        models.DilutionGrade.day.desc())).scalars().first()
+    return {"ticker": c.ticker, "tranches_stored": len(body.tranches),
+            "new_grade": g and {"grade": g.grade,
+                                "overhang_pct_float": round(g.overhang_ratio * 100, 1),
+                                "itm_warrant_cash": g.itm_warrant_cash,
+                                "rationale": g.rationale}}
