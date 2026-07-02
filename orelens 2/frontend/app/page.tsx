@@ -1,206 +1,109 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { getScanner } from "@/lib/api";
-import GradeChip from "@/components/GradeChip";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type Row = Record<string, any>;
-const TABS = [
-  { id: "value-momentum", label: "Best Bang-for-Buck" },
-  { id: "most-dilutive", label: "Most Dilutive" },
-  { id: "active-drills", label: "Active Drill Programs" },
-  { id: "high-grade-breakouts", label: "High-Grade Breakouts" },
-] as const;
+const FEATURES = [
+  { title: "Dilution Grades A-F", body: "Every company graded on cash runway, burn rate, and warrant overhang - recomputed nightly from real filings and market data." },
+  { title: "Warrant Overhang Maps", body: "Every warrant tranche plotted by strike and expiry. Green = in the money and coming. Grey = the resistance levels waiting overhead." },
+  { title: "Share Count History", body: "Quarterly shares outstanding for every name, so you can see exactly how many new shares hit the market - and when." },
+  { title: "AI Filing Extraction", body: "MD&As and financial statements read automatically: cash, burn, and full warrant tables pulled straight from the source documents." },
+  { title: "Purpose-Built Scanners", body: "Best Bang-for-Buck, Most Dilutive, Active Drill Programs, and High-Grade Breakouts - screens designed for juniors, not adapted from large caps." },
+  { title: "Search Any Junior", body: "Type any TSX / TSX-V / CSE / ASX ticker. Not tracked yet? One click pulls its full history and builds the page on the spot." },
+];
 
-const COMMODITIES = ["Gold", "Silver", "Copper", "Nickel", "Lithium"];
-const TIERS = ["Tier 1", "High Risk"];
-
-const COLUMNS: Record<string, { key: string; label: string }[]> = {
-  "value-momentum": [
-    { key: "ticker", label: "Ticker" }, { key: "score", label: "Score" },
-    { key: "ev_per_oz", label: "EV/oz" }, { key: "factors", label: "Factors" },
-    { key: "runway_m", label: "Runway (mo)" }, { key: "grade", label: "Grade" },
-  ],
-  "most-dilutive": [
-    { key: "ticker", label: "Ticker" }, { key: "grade", label: "Grade" },
-    { key: "runway_m", label: "Runway (mo)" }, { key: "overhang_pct", label: "Overhang %" },
-    { key: "shares_growth_pct", label: "Share Growth %" }, { key: "why", label: "Why" },
-  ],
-  "active-drills": [
-    { key: "ticker", label: "Ticker" }, { key: "project", label: "Project" },
-    { key: "commodity", label: "Commodity" }, { key: "rigs_active", label: "Rigs" },
-    { key: "planned_meters", label: "Planned m" }, { key: "runway_m", label: "Runway (mo)" },
-    { key: "grade", label: "Grade" },
-  ],
-  "high-grade-breakouts": [
-    { key: "ticker", label: "Ticker" }, { key: "intercept", label: "Intercept" },
-    { key: "grade_meters", label: "Gram-meters" }, { key: "volume_ratio", label: "Vol x20d" },
-    { key: "hit_pct", label: "Hit %" }, { key: "grade", label: "Grade" },
-  ],
-};
-
-const EMPTY: Record<string, string> = {
-  "most-dilutive": "No C/D/F-graded companies right now. Grades sharpen as filings and warrant data load per company.",
-  "active-drills": "No companies with drill-start news in the last 45 days. This fills as the nightly news sync runs.",
-  "high-grade-breakouts": "No benchmark-beating intercepts with volume breakouts recently. These are rare by design.",
-};
-
-export default function Dashboard() {
-  const [tab, setTab] = useState<string>("value-momentum");
-  const [commodity, setCommodity] = useState("");
-  const [tier, setTier] = useState("");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "", dir: -1 });
-  const [error, setError] = useState("");
-  const [q, setQ] = useState("");
-  const [hits, setHits] = useState<Row[]>([]);
-  const [adding, setAdding] = useState(false);
-
-  const load = useCallback(async () => {
-    setError("");
-    const params: Record<string, string> = {};
-    if (commodity) params.commodity = commodity;
-    if (tier) params.tier = tier;
-    try {
-      setRows(await getScanner(tab, params));
-    } catch {
-      setError("Couldn't reach the API. It may be waking up - retry in ~30s.");
-      setRows([]);
-    }
-  }, [tab, commodity, tier]);
-
-  useEffect(() => { load(); }, [load]);
+export default function Landing() {
+  const [stats, setStats] = useState<{ tracked: number | null }>({ tracked: null });
 
   useEffect(() => {
-    if (q.trim().length < 2) { setHits([]); return; }
-    const t = setTimeout(async () => {
-      try {
-        const r = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`);
-        setHits(await r.json());
-      } catch { setHits([]); }
-    }, 250);
-    return () => clearTimeout(t);
-  }, [q]);
-
-  const addTicker = async () => {
-    setAdding(true);
-    try {
-      const r = await fetch(`${API}/api/admin/add-ticker`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: q.trim().toUpperCase() }),
-      });
-      const d = await r.json();
-      if (d.added) window.location.href = `/ticker/${d.added}`;
-      else alert(d.error || "Could not add ticker");
-    } catch { alert("Could not reach the API"); }
-    setAdding(false);
-  };
-
-  const sorted = useMemo(() => {
-    if (!sort.key) return rows;
-    return [...rows].sort((a, b) => {
-      const av = a[sort.key], bv = b[sort.key];
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      return (av > bv ? 1 : av < bv ? -1 : 0) * sort.dir;
-    });
-  }, [rows, sort]);
-
-  const cols = COLUMNS[tab];
+    fetch(`${API}/api/scanners/value-momentum`)
+      .then((r) => r.json())
+      .then((rows) => setStats({ tracked: Array.isArray(rows) ? rows.length : null }))
+      .catch(() => {});
+  }, []);
 
   return (
-    <div>
-      <div className="relative mb-5">
-        <input value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Search any junior mining stock - ticker or name..."
-          className="w-full bg-tray border border-seam rounded-sm px-4 py-2.5 text-sm placeholder:text-ash focus:border-assay focus:outline-none" />
-        {q.trim().length >= 2 && (
-          <div className="absolute z-10 mt-1 w-full bg-tray border border-seam rounded-sm shadow-lg">
-            {hits.map((h) => (
-              <a key={h.ticker} href={`/ticker/${h.ticker}`}
-                 className="flex items-baseline gap-3 px-4 py-2 hover:bg-shale text-sm">
-                <span className="font-mono text-assay">{h.ticker}</span>
-                <span>{h.name}</span>
-                <span className="text-ash text-xs ml-auto">{h.exchange} - {h.commodity}</span>
-              </a>
-            ))}
-            {hits.length === 0 && (
-              <button onClick={addTicker} disabled={adding}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-shale">
-                {adding ? "Fetching market data..." :
-                  `Not tracked yet - add "${q.trim().toUpperCase()}" and pull its data now`}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 mb-5">
-        {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
-              tab === t.id ? "border-assay text-assay bg-tray" : "border-seam text-ash hover:text-bone"}`}>
-            {t.label}
-          </button>
-        ))}
-        <div className="ml-auto flex gap-2">
-          <select value={commodity} onChange={(e) => setCommodity(e.target.value)}
-            className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
-            <option value="">All commodities</option>
-            {COMMODITIES.map((c) => <option key={c}>{c}</option>)}
-          </select>
-          <select value={tier} onChange={(e) => setTier(e.target.value)}
-            className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
-            <option value="">All jurisdictions</option>
-            {TIERS.map((t) => <option key={t}>{t}</option>)}
-          </select>
+    <div className="space-y-16">
+      {/* Hero */}
+      <section className="text-center pt-10 pb-4">
+        <p className="text-ash text-xs tracking-[0.3em] uppercase mb-4">Junior Mining Intelligence</p>
+        <h1 className="font-display text-5xl md:text-6xl tracking-wide leading-tight">
+          See dilution <span className="text-hazard">before</span> it hits.
+        </h1>
+        <p className="text-bone/90 max-w-2xl mx-auto mt-5 text-lg">
+          OreLens turns regulatory filings into live intelligence on TSX and TSX-V
+          exploration stocks: dilution grades, warrant overhang maps, drill-result
+          scanners, and quarterly share-count history - updated every night.
+        </p>
+        <div className="flex items-center justify-center gap-4 mt-8">
+          <Link href="/dashboard"
+            className="bg-assay text-white px-6 py-3 rounded-sm font-display text-lg tracking-wide hover:opacity-90">
+            Open the Scanner
+          </Link>
+          <Link href="/dashboard"
+            className="border border-seam px-6 py-3 rounded-sm font-display text-lg tracking-wide text-bone hover:border-assay hover:text-assay">
+            Search a Stock
+          </Link>
         </div>
-      </div>
+        <p className="text-ash text-sm mt-6">
+          {stats.tracked ? `${stats.tracked}+ graded juniors` : "40+ juniors tracked"} &middot; TSX &middot; TSX-V &middot; CSE &middot; ASX &middot; updated nightly
+        </p>
+      </section>
 
-      {error && <p className="text-hazard text-sm mb-4">{error}</p>}
+      {/* The problem strip */}
+      <section className="bg-tray border border-seam rounded-sm p-8 text-center">
+        <p className="text-bone/90 max-w-3xl mx-auto text-lg leading-relaxed">
+          Junior miners live and die by the treasury. The warrant table is buried in a
+          PDF footnote, the burn rate takes four statements to reconstruct, and by the
+          time retail sees the financing, the shares are already trading.
+          <span className="text-assay"> OreLens reads the filings so you don't have to.</span>
+        </p>
+      </section>
 
-      <table className="core-tray w-full">
-        <thead>
-          <tr>
-            {cols.map((c) => (
-              <th key={c.key} className="cursor-pointer select-none"
-                onClick={() => setSort((s) => ({ key: c.key, dir: s.key === c.key ? ((-s.dir) as 1 | -1) : -1 }))}>
-                {c.label}{sort.key === c.key ? (sort.dir === -1 ? " v" : " ^") : ""}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((r, i) => (
-            <tr key={r.ticker ?? i}>
-              {cols.map((c) => (
-                <td key={c.key} className={c.key === "ticker" ? "font-mono" : ""}>
-                  {c.key === "ticker" ? (
-                    <a href={`/ticker/${r.ticker}`} className="text-assay hover:underline">
-                      {r.ticker}<span className="text-ash text-xs">.{r.exchange}</span>
-                    </a>
-                  ) : c.key === "grade" ? (
-                    <GradeChip grade={r.grade} />
-                  ) : c.key === "why" ? (
-                    <span className="text-xs text-ash">{r.why}</span>
-                  ) : c.key === "factors" ? (
-                    <span className="text-xs text-ash">{(r.factors ?? []).join(" - ")}</span>
-                  ) : (
-                    <span>{r[c.key] ?? "-"}</span>
-                  )}
-                </td>
-              ))}
-            </tr>
+      {/* Features */}
+      <section>
+        <h2 className="font-display text-3xl tracking-wide text-center mb-8">What's inside</h2>
+        <div className="grid md:grid-cols-3 gap-5">
+          {FEATURES.map((f) => (
+            <div key={f.title} className="bg-tray border border-seam rounded-sm p-5">
+              <h3 className="font-display text-xl tracking-wide text-assay mb-2">{f.title}</h3>
+              <p className="text-sm text-bone/80 leading-relaxed">{f.body}</p>
+            </div>
           ))}
-          {!error && sorted.length === 0 && (
-            <tr><td colSpan={cols.length} className="text-ash text-center py-8">
-              {EMPTY[tab] ?? "No companies match these filters."}
-            </td></tr>
-          )}
-        </tbody>
-      </table>
+        </div>
+      </section>
 
+      {/* How grading works */}
+      <section className="bg-tray border border-seam rounded-sm p-8">
+        <h2 className="font-display text-3xl tracking-wide text-center mb-6">How the grade works</h2>
+        <div className="grid md:grid-cols-3 gap-6 text-center">
+          <div>
+            <p className="font-display text-4xl text-oxide">A</p>
+            <p className="text-sm text-bone/80 mt-2">12+ months of runway or fully-funded programs, warrant overhang under 15% of float.</p>
+          </div>
+          <div>
+            <p className="font-display text-4xl text-ash">B / C</p>
+            <p className="text-sm text-bone/80 mt-2">Funding secure but overhang building, or runway tightening toward the next raise window.</p>
+          </div>
+          <div>
+            <p className="font-display text-4xl text-hazard">D / F</p>
+            <p className="text-sm text-bone/80 mt-2">Months of cash left, heavy warrant stacks, or both - a financing is coming, priced against you.</p>
+          </div>
+        </div>
+        <p className="text-center mt-6">
+          <Link href="/dashboard" className="text-assay hover:underline">
+            See today's grades &rarr;
+          </Link>
+        </p>
+      </section>
+
+      {/* Footer */}
+      <footer className="text-center text-xs text-ash pb-8 space-y-2">
+        <p>OreLens is a research tool. Nothing on this site is investment advice.
+           Data is derived from public filings and market feeds and may contain errors or lags - verify against source documents.</p>
+        <p>&copy; 2026 OreLens</p>
+      </footer>
     </div>
   );
 }
