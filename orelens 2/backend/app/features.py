@@ -74,6 +74,12 @@ async def add_ticker(body: AddTickerBody, db: Session = Depends(get_db)):
         if row["date"] not in have:
             db.add(models.DailyPrice(company_id=c.id, day=row["date"],
                                      close=row["close"], volume=row["volume"]))
+    for sh in data.get("shares_history", []):
+        if not db.execute(select(models.SharesHistory).where(
+                models.SharesHistory.company_id == c.id,
+                models.SharesHistory.as_of == sh["as_of"])).scalar_one_or_none():
+            db.add(models.SharesHistory(company_id=c.id,
+                                        as_of=sh["as_of"], shares=sh["shares"]))
     if data["cash"] and data["monthly_burn"]:
         if not db.execute(select(models.FinancialSnapshot).where(
                 models.FinancialSnapshot.company_id == c.id)).scalars().first():
@@ -188,3 +194,44 @@ async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
             "new_grade": g and {"grade": g.grade,
                                 "overhang_pct_float": round(g.overhang_ratio * 100, 1),
                                 "rationale": g.rationale}}
+
+
+# ------------------------------------------------- most-dilutive scanner
+from sqlalchemy import desc as _desc
+
+GRADE_ORDER = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
+
+
+@router.get("/api/scanners/most-dilutive")
+def most_dilutive(commodity: str | None = None, tier: str | None = None,
+                  db: Session = Depends(get_db)):
+    """Worst dilution profiles first: F then D then C, tie-broken by shortest
+    runway, then largest warrant overhang."""
+    out = []
+    for c in db.execute(select(models.Company)).scalars():
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        g = db.execute(select(models.DilutionGrade).where(
+            models.DilutionGrade.company_id == c.id)
+            .order_by(_desc(models.DilutionGrade.day)).limit(1)).scalar_one_or_none()
+        if not g or g.grade not in ("F", "D", "C"):
+            continue
+        hist = db.execute(select(models.SharesHistory).where(
+            models.SharesHistory.company_id == c.id)
+            .order_by(models.SharesHistory.as_of)).scalars().all()
+        yoy = None
+        if len(hist) >= 2 and hist[0].shares:
+            yoy = round(100 * (hist[-1].shares - hist[0].shares) / hist[0].shares, 1)
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "grade": g.grade, "runway_m": g.adjusted_runway_m,
+            "overhang_pct": round(g.overhang_ratio * 100, 1),
+            "shares_growth_pct": yoy,
+            "why": g.rationale,
+        })
+    out.sort(key=lambda x: (GRADE_ORDER.get(x["grade"], 9),
+                            x["runway_m"] if x["runway_m"] is not None else 999,
+                            -(x["overhang_pct"] or 0)))
+    return out
