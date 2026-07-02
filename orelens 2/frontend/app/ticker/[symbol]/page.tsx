@@ -4,6 +4,7 @@ import { getTicker, fmt } from "@/lib/api";
 import PriceChart from "@/components/PriceChart";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
+import SharesHistoryChart from "@/components/SharesHistoryChart";
 import DrillTimeline from "@/components/DrillTimeline";
 
 export default function TickerPage({ params }: { params: { symbol: string } }) {
@@ -38,6 +39,7 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
         <div className="space-y-6">
           <DilutionGauge grade={grade} />
           <WarrantOverhangMap warrants={warrants} />
+          <SharesHistoryChart history={data.shares_history} />
         </div>
         <div className="bg-tray border border-seam rounded-sm p-4 h-fit">
           <p className="text-xs uppercase tracking-widest text-ash mb-3">Capital Structure</p>
