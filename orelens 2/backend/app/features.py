@@ -100,8 +100,9 @@ class ExtractBody(BaseModel):
 
 @router.post("/api/admin/extract-filing")
 async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
-    """Fetch a filing PDF, extract cash / burn / warrant & option tables with
-    the Anthropic API, store them with the filing URL as source, and re-grade."""
+    """Fetch a filing (PDF or EDGAR HTML exhibit), extract cash / burn /
+    warrant & option tables with the Anthropic API, store them with the
+    filing URL as source, and re-grade."""
     from .services import ingest
     from sqlalchemy import delete as _delete
     from datetime import datetime as _dt
@@ -111,20 +112,34 @@ async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
     if not c:
         return {"error": "unknown ticker — add it first"}
 
+    headers = {"User-Agent": "OreLens research tool (orelens-api.onrender.com)"}
     try:
-        async with _httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with _httpx.AsyncClient(timeout=60, follow_redirects=True,
+                                      headers=headers) as client:
             r = await client.get(body.url)
             r.raise_for_status()
-            pdf_bytes = r.content
+            raw = r.content
+            ctype = r.headers.get("content-type", "")
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not fetch PDF: {exc}"}
+        return {"error": f"could not fetch filing: {exc}"}
 
-    try:
-        text = await run_in_threadpool(ingest.pdf_to_text, pdf_bytes)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not read PDF: {exc}"}
+    # Accept both PDF filings (company sites, SEDAR+) and HTML exhibits (EDGAR 6-K)
+    if raw[:5] == b"%PDF-" or "pdf" in ctype:
+        try:
+            text = await run_in_threadpool(ingest.pdf_to_text, raw)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not read PDF: {exc}"}
+    else:
+        import re as _re
+        html = raw.decode("utf-8", errors="ignore")
+        html = _re.sub(r"<(script|style)[\s\S]*?</\1>", " ", html, flags=_re.I)
+        html = _re.sub(r"<br\s*/?>|</(p|tr|div|h[1-6]|li)>", "\n", html, flags=_re.I)
+        html = _re.sub(r"</t[dh]>", " | ", html, flags=_re.I)
+        text = _re.sub(r"<[^>]+>", " ", html)
+        text = _re.sub(r"&nbsp;?", " ", text)
+        text = _re.sub(r"[ \t]{2,}", " ", text)
     if len(text) < 500:
-        return {"error": "PDF produced almost no text — may be a scanned image"}
+        return {"error": "filing produced almost no text — may be a scanned image"}
 
     result = await ingest.extract_capital_structure(text)
     if not result:
