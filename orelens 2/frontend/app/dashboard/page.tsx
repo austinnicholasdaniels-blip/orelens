@@ -23,9 +23,9 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "runway_m", label: "Runway (mo)" }, { key: "grade", label: "Grade" },
   ],
   "most-dilutive": [
-    { key: "ticker", label: "Ticker" }, { key: "grade", label: "Grade" },
-    { key: "runway_m", label: "Runway (mo)" }, { key: "overhang_pct", label: "Overhang %" },
-    { key: "shares_growth_pct", label: "Share Growth %" }, { key: "why", label: "Why" },
+    { key: "ticker", label: "Ticker" }, { key: "qoq_pct", label: "Shares Added QoQ %" },
+    { key: "shares_added_m", label: "New Shares (M)" }, { key: "total_growth_pct", label: "Total Growth %" },
+    { key: "as_of", label: "As Of Quarter" }, { key: "grade", label: "Grade" },
   ],
   "active-drills": [
     { key: "ticker", label: "Ticker" }, { key: "project", label: "Project" },
@@ -41,7 +41,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 const EMPTY: Record<string, string> = {
-  "most-dilutive": "No C/D/F-graded companies right now. Grades sharpen as filings and warrant data load per company.",
+  "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
   "active-drills": "No companies with drill-start news in the last 45 days. This fills as the nightly news sync runs.",
   "high-grade-breakouts": "No benchmark-beating intercepts with volume breakouts recently. These are rare by design.",
 };
@@ -204,4 +204,3 @@ export default function Dashboard() {
     </div>
   );
 }
-
