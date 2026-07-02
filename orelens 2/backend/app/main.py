@@ -95,6 +95,10 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
         select(models.DrillProgram).where(models.DrillProgram.company_id == c.id,
                                           models.DrillProgram.active.is_(True))
     ).scalars().first()
+    shares_hist = db.execute(
+        select(models.SharesHistory).where(models.SharesHistory.company_id == c.id)
+        .order_by(models.SharesHistory.as_of)
+    ).scalars().all()
 
     # jurisdiction percentile for the best recent intercept (12-month window)
     comparison = None
@@ -158,6 +162,13 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
             "intercept": f"{r.grade:g} {r.unit} {r.commodity} over {r.width_m:g} m",
             "grade_meters": r.grade_meters, "above_benchmark": r.above_benchmark,
         } for r in results],
+        "shares_history": [
+            {"as_of": h.as_of.isoformat(), "shares": h.shares,
+             "added": (h.shares - shares_hist[i - 1].shares) if i else None,
+             "added_pct": (round(100 * (h.shares - shares_hist[i - 1].shares)
+                                 / shares_hist[i - 1].shares, 1)
+                           if i and shares_hist[i - 1].shares else None)}
+            for i, h in enumerate(shares_hist)],
         "comparison": comparison,
     }
 
