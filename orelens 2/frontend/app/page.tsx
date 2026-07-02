@@ -27,7 +27,7 @@ export default function Landing() {
     <div className="space-y-16">
       {/* Hero */}
       <section className="text-center pt-10 pb-4">
-        <p className="text-ash text-xs tracking-[0.3em] uppercase mb-4">Junior Mining Intelligence</p>
+        <p className="text-assay text-xs tracking-[0.3em] uppercase mb-4">Junior Mining Intelligence</p>
         <h1 className="font-display text-5xl md:text-6xl tracking-wide leading-tight">
           See dilution <span className="text-hazard">before</span> it hits.
         </h1>
@@ -38,11 +38,11 @@ export default function Landing() {
         </p>
         <div className="flex items-center justify-center gap-4 mt-8">
           <Link href="/dashboard"
-            className="bg-assay text-white px-6 py-3 rounded-sm font-display text-lg tracking-wide hover:opacity-90">
+            className="bg-assay text-shale font-semibold px-6 py-3 rounded-sm font-display text-lg tracking-wide hover:opacity-90">
             Open the Scanner
           </Link>
           <Link href="/dashboard"
-            className="border border-seam px-6 py-3 rounded-sm font-display text-lg tracking-wide text-bone hover:border-assay hover:text-assay">
+            className="border border-assay/40 px-6 py-3 rounded-sm font-display text-lg tracking-wide text-assay hover:border-assay hover:bg-assay/10">
             Search a Stock
           </Link>
         </div>
@@ -66,7 +66,7 @@ export default function Landing() {
         <h2 className="font-display text-3xl tracking-wide text-center mb-8">What's inside</h2>
         <div className="grid md:grid-cols-3 gap-5">
           {FEATURES.map((f) => (
-            <div key={f.title} className="bg-tray border border-seam rounded-sm p-5">
+            <div key={f.title} className="bg-tray border border-seam rounded-sm p-5 hover:border-assay/50 transition-colors">
               <h3 className="font-display text-xl tracking-wide text-assay mb-2">{f.title}</h3>
               <p className="text-sm text-bone/80 leading-relaxed">{f.body}</p>
             </div>
@@ -79,7 +79,7 @@ export default function Landing() {
         <h2 className="font-display text-3xl tracking-wide text-center mb-6">How the grade works</h2>
         <div className="grid md:grid-cols-3 gap-6 text-center">
           <div>
-            <p className="font-display text-4xl text-oxide">A</p>
+            <p className="font-display text-4xl text-assay">A</p>
             <p className="text-sm text-bone/80 mt-2">12+ months of runway or fully-funded programs, warrant overhang under 15% of float.</p>
           </div>
           <div>
