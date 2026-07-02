@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from ..db import SessionLocal
 from ..models import (
     Company, DailyPrice, FinancialSnapshot, WarrantTranche,
-    PressRelease, DrillResult, DrillProgram, DilutionGrade,
+    PressRelease, DrillResult, DrillProgram, DilutionGrade, SharesHistory,
 )
 from ..services import ingest, drill_parser
 from ..services.grading import GradeInput, TrancheIn, compute_grade
@@ -46,6 +46,12 @@ async def sync_prices(db: Session) -> None:
                               close=quote["close"], volume=quote["volume"] or 0))
         if quote.get("shares_outstanding"):
             c.shares_outstanding = quote["shares_outstanding"]
+        for sh in data.get("shares_history", []):
+            if not db.execute(select(SharesHistory).where(
+                    SharesHistory.company_id == c.id,
+                    SharesHistory.as_of == sh["as_of"])).scalar_one_or_none():
+                db.add(SharesHistory(company_id=c.id,
+                                     as_of=sh["as_of"], shares=sh["shares"]))
     db.commit()
 
 
