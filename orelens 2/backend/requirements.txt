@@ -11,3 +11,4 @@ anthropic==0.39.*
 python-dateutil==2.9.*
 apscheduler==3.10.*
 pytest==8.*
+yfinance
