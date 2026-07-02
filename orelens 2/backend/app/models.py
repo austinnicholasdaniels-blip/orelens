@@ -146,3 +146,13 @@ class DilutionGrade(Base):
 
     company = relationship("Company", back_populates="grades")
     __table_args__ = (Index("ix_grade_company_day", "company_id", "day", unique=True),)
+
+
+class SharesHistory(Base):
+    """Quarterly shares-outstanding snapshots (from quarterly balance sheets).
+    The quarter-over-quarter delta is the dilution actually hitting the market."""
+    __tablename__ = "shares_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    as_of: Mapped[date] = mapped_column(Date)
+    shares: Mapped[float] = mapped_column(Float)
