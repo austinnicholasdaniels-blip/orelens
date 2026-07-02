@@ -1,90 +1,3 @@
-
-
-# ------------------------------------------------- filing extraction (LLM)
-import httpx as _httpx
-
-
-class ExtractBody(BaseModel):
-    ticker: str
-    url: str          # direct link to the MD&A / financial statements PDF
-    replace_warrants: bool = True
-
-
-@router.post("/api/admin/extract-filing")
-async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
-    """Fetch a filing PDF, extract cash / burn / warrant & option tables with
-    the Anthropic API, store them with the filing URL as source, and re-grade."""
-    from .services import ingest
-    from sqlalchemy import delete as _delete
-    from datetime import datetime as _dt
-
-    c = db.execute(select(models.Company).where(
-        models.Company.ticker == body.ticker.upper())).scalar_one_or_none()
-    if not c:
-        return {"error": "unknown ticker — add it first"}
-
-    try:
-        async with _httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.get(body.url)
-            r.raise_for_status()
-            pdf_bytes = r.content
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not fetch PDF: {exc}"}
-
-    try:
-        text = await run_in_threadpool(ingest.pdf_to_text, pdf_bytes)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not read PDF: {exc}"}
-    if len(text) < 500:
-        return {"error": "PDF produced almost no text — may be a scanned image"}
-
-    result = await ingest.extract_capital_structure(text)
-    if not result:
-        return {"error": "extraction failed — check ANTHROPIC_API_KEY / try again"}
-
-    stored = {"cash": None, "monthly_burn": None, "warrants": 0, "options": 0}
-    src = f"LLM extraction: {body.url}"[:240]
-
-    if result.get("cash_and_equivalents") and result.get("monthly_burn_rate"):
-        db.add(models.FinancialSnapshot(
-            company_id=c.id, as_of=date.today(),
-            cash=float(result["cash_and_equivalents"]),
-            monthly_burn=float(result["monthly_burn_rate"]),
-            source_filing=src))
-        stored["cash"] = float(result["cash_and_equivalents"])
-        stored["monthly_burn"] = float(result["monthly_burn_rate"])
-
-    def _tranches(items, kind):
-        n = 0
-        for t in items or []:
-            try:
-                db.add(models.WarrantTranche(
-                    company_id=c.id, kind=kind,
-                    strike=float(t["strike_price"]),
-                    expiry=_dt.strptime(str(t["expiry_date"]), "%Y-%m-%d").date(),
-                    quantity=float(t["quantity_outstanding"]),
-                    source_filing=src))
-                n += 1
-            except (KeyError, TypeError, ValueError):
-                continue
-        return n
-
-    if body.replace_warrants and (result.get("warrants") or result.get("options")):
-        db.execute(_delete(models.WarrantTranche).where(
-            models.WarrantTranche.company_id == c.id))
-    stored["warrants"] = _tranches(result.get("warrants"), "warrant")
-    stored["options"] = _tranches(result.get("options"), "option")
-    db.commit()
-
-    from .jobs.nightly import run_grades
-    run_grades(db)
-    g = db.execute(select(models.DilutionGrade).where(
-        models.DilutionGrade.company_id == c.id).order_by(
-        models.DilutionGrade.day.desc())).scalars().first()
-    return {"ticker": c.ticker, "extracted": stored,
-            "new_grade": g and {"grade": g.grade,
-                                "overhang_pct_float": round(g.overhang_ratio * 100, 1),
-                                "rationale": g.rationale}}
 """
 Site features: search and on-demand ticker adds.
 """
@@ -174,3 +87,89 @@ async def add_ticker(body: AddTickerBody, db: Session = Depends(get_db)):
     return {"added": tick, "exchange": c.exchange,
             "price_days": len(data["prices"])}
 
+
+# ------------------------------------------------- filing extraction (LLM)
+import httpx as _httpx
+
+
+class ExtractBody(BaseModel):
+    ticker: str
+    url: str          # direct link to the MD&A / financial statements PDF
+    replace_warrants: bool = True
+
+
+@router.post("/api/admin/extract-filing")
+async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
+    """Fetch a filing PDF, extract cash / burn / warrant & option tables with
+    the Anthropic API, store them with the filing URL as source, and re-grade."""
+    from .services import ingest
+    from sqlalchemy import delete as _delete
+    from datetime import datetime as _dt
+
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == body.ticker.upper())).scalar_one_or_none()
+    if not c:
+        return {"error": "unknown ticker — add it first"}
+
+    try:
+        async with _httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            r = await client.get(body.url)
+            r.raise_for_status()
+            pdf_bytes = r.content
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not fetch PDF: {exc}"}
+
+    try:
+        text = await run_in_threadpool(ingest.pdf_to_text, pdf_bytes)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not read PDF: {exc}"}
+    if len(text) < 500:
+        return {"error": "PDF produced almost no text — may be a scanned image"}
+
+    result = await ingest.extract_capital_structure(text)
+    if not result:
+        return {"error": "extraction failed — check ANTHROPIC_API_KEY / try again"}
+
+    stored = {"cash": None, "monthly_burn": None, "warrants": 0, "options": 0}
+    src = f"LLM extraction: {body.url}"[:240]
+
+    if result.get("cash_and_equivalents") and result.get("monthly_burn_rate"):
+        db.add(models.FinancialSnapshot(
+            company_id=c.id, as_of=date.today(),
+            cash=float(result["cash_and_equivalents"]),
+            monthly_burn=float(result["monthly_burn_rate"]),
+            source_filing=src))
+        stored["cash"] = float(result["cash_and_equivalents"])
+        stored["monthly_burn"] = float(result["monthly_burn_rate"])
+
+    def _tranches(items, kind):
+        n = 0
+        for t in items or []:
+            try:
+                db.add(models.WarrantTranche(
+                    company_id=c.id, kind=kind,
+                    strike=float(t["strike_price"]),
+                    expiry=_dt.strptime(str(t["expiry_date"]), "%Y-%m-%d").date(),
+                    quantity=float(t["quantity_outstanding"]),
+                    source_filing=src))
+                n += 1
+            except (KeyError, TypeError, ValueError):
+                continue
+        return n
+
+    if body.replace_warrants and (result.get("warrants") or result.get("options")):
+        db.execute(_delete(models.WarrantTranche).where(
+            models.WarrantTranche.company_id == c.id))
+    stored["warrants"] = _tranches(result.get("warrants"), "warrant")
+    stored["options"] = _tranches(result.get("options"), "option")
+    db.commit()
+
+    from .jobs.nightly import run_grades
+    run_grades(db)
+    g = db.execute(select(models.DilutionGrade).where(
+        models.DilutionGrade.company_id == c.id).order_by(
+        models.DilutionGrade.day.desc())).scalars().first()
+    return {"ticker": c.ticker, "extracted": stored,
+            "new_grade": g and {"grade": g.grade,
+                                "overhang_pct_float": round(g.overhang_ratio * 100, 1),
+                                "rationale": g.rationale}}
