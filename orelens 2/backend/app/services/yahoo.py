@@ -22,13 +22,14 @@ def ysym(ticker: str, exchange: str) -> str:
 
 
 def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
-    """Returns {prices: [{date, close, volume}], shares_outstanding, cash, monthly_burn}.
+    """Returns {prices, shares_outstanding, cash, monthly_burn, shares_history}.
     Any piece that fails comes back as None/empty — never raises."""
     import yfinance as yf
     import pandas as pd
 
     sym = ysym(ticker, exchange)
-    out = {"prices": [], "shares_outstanding": None, "cash": None, "monthly_burn": None}
+    out = {"prices": [], "shares_outstanding": None, "cash": None,
+           "monthly_burn": None, "shares_history": []}
     t = yf.Ticker(sym)
 
     # --- daily price history ---
@@ -53,6 +54,19 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
     except Exception as exc:  # noqa: BLE001
         log.warning("shares %s failed: %s", sym, exc)
 
+    # --- quarterly shares outstanding history ---
+    try:
+        qbs0 = t.quarterly_balance_sheet
+        for label in ("Ordinary Shares Number", "Share Issued"):
+            if qbs0 is not None and label in qbs0.index:
+                ser = qbs0.loc[label].dropna()
+                out["shares_history"] = [
+                    {"as_of": idx.date() if hasattr(idx, "date") else idx,
+                     "shares": float(v)} for idx, v in ser.items()]
+                break
+    except Exception as exc:  # noqa: BLE001
+        log.warning("shares history %s failed: %s", sym, exc)
+
     # --- cash & burn from quarterly statements ---
     try:
         qbs = t.quarterly_balance_sheet
@@ -75,4 +89,3 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
         log.warning("cashflow %s failed: %s", sym, exc)
 
     return out
-
