@@ -56,16 +56,25 @@ async def sync_prices(db: Session) -> None:
 
 
 async def sync_newswires(db: Session) -> None:
+    import re as _re
     tickers = {c.ticker: c.id for c in db.execute(select(Company)).scalars()}
     names = {c.name.lower(): c.id for c in db.execute(select(Company)).scalars()}
     for item in ingest.fetch_wire_items():
         if db.execute(select(PressRelease).where(PressRelease.url == item["url"])).scalar_one_or_none():
             continue
         text = f"{item['headline']} {item['summary']}"
-        company_id = next(
-            (cid for t, cid in tickers.items() if f"({t}" in text or f"{t}:" in text),
-            None,
-        ) or next((cid for n, cid in names.items() if n in text.lower()), None)
+        # only match a ticker inside a real exchange parenthetical, e.g.
+        # "(TSXV: DV)" / "(TSX: SKE)" / "(CSE: API)" - avoids 2-letter false hits
+        company_id = None
+        for t, cid in tickers.items():
+            if _re.search(
+                    rf"\((?:TSX|TSXV|TSX-V|CSE|ASX|NYSE|OTCQ[BX])\s*:\s*{_re.escape(t)}\b",
+                    text):
+                company_id = cid
+                break
+        if not company_id:
+            company_id = next(
+                (cid for nm, cid in names.items() if nm in text.lower()), None)
 
         pr = PressRelease(
             company_id=company_id, published=item["published"],
