@@ -95,6 +95,10 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
         select(models.DrillProgram).where(models.DrillProgram.company_id == c.id,
                                           models.DrillProgram.active.is_(True))
     ).scalars().first()
+    fins = db.execute(
+        select(models.Financing).where(models.Financing.company_id == c.id)
+        .order_by(desc(models.Financing.announced)).limit(10)
+    ).scalars().all()
     shares_hist = db.execute(
         select(models.SharesHistory).where(models.SharesHistory.company_id == c.id)
         .order_by(models.SharesHistory.as_of)
@@ -162,6 +166,14 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
             "intercept": f"{r.grade:g} {r.unit} {r.commodity} over {r.width_m:g} m",
             "grade_meters": r.grade_meters, "above_benchmark": r.above_benchmark,
         } for r in results],
+        "financings": [
+            {"kind": f.kind, "announced": f.announced.isoformat(),
+             "closed": f.closed,
+             "close_date": f.close_date and f.close_date.isoformat(),
+             "amount": f.amount, "price": f.price_per_unit,
+             "warrant_strike": f.warrant_strike,
+             "hold_expiry": f.hold_expiry and f.hold_expiry.isoformat(),
+             "headline": f.headline, "url": f.source_url} for f in fins],
         "shares_history": [
             {"as_of": h.as_of.isoformat(), "shares": h.shares,
              "added": (h.shares - shares_hist[i - 1].shares) if i else None,
