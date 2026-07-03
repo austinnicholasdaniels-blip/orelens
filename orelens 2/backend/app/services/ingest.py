@@ -143,10 +143,17 @@ WIRE_FEEDS = {
 
 
 def fetch_wire_items() -> list[dict]:
+    """Fetch each feed over httpx with a browser-style User-Agent (the feeds
+    host rejects default library agents), then parse the bytes."""
     items = []
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
     for wire, url in WIRE_FEEDS.items():
         try:
-            feed = feedparser.parse(url)
+            resp = httpx.get(url, headers=ua, timeout=20, follow_redirects=True)
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
             for e in feed.entries:
                 items.append({
                     "wire": wire,
