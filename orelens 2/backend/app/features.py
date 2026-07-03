@@ -307,3 +307,82 @@ def coiled_springs(commodity: str | None = None, tier: str | None = None,
                    db: Session = Depends(get_db)):
     from .services import scanners as _sc
     return _sc.scan_coiled_springs(db, commodity, tier)
+
+
+# ------------------------------------------------- unlock calendar
+@router.get("/api/scanners/unlock-calendar")
+def unlock_calendar(commodity: str | None = None, tier: str | None = None,
+                    db: Session = Depends(get_db)):
+    """Closed financings whose 4-month hold is expiring: the day this paper
+    free-trades is a supply event. Sorted soonest first."""
+    from datetime import timedelta as _td
+    today = date.today()
+    out = []
+    for fin in db.execute(select(models.Financing).where(
+            models.Financing.closed.is_(True),
+            models.Financing.hold_expiry.is_not(None),
+            models.Financing.hold_expiry >= today - _td(days=7))
+            .order_by(models.Financing.hold_expiry)).scalars():
+        c = db.get(models.Company, fin.company_id)
+        if not c:
+            continue
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        est_shares = (fin.amount / fin.price_per_unit
+                      if fin.amount and fin.price_per_unit else None)
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "kind": fin.kind, "close_date": fin.close_date and fin.close_date.isoformat(),
+            "amount_m": fin.amount and round(fin.amount / 1e6, 2),
+            "price": fin.price_per_unit,
+            "est_shares_m": est_shares and round(est_shares / 1e6, 1),
+            "warrant_strike": fin.warrant_strike,
+            "hold_expiry": fin.hold_expiry.isoformat(),
+            "days_until": (fin.hold_expiry - today).days,
+        })
+    return out
+
+
+@router.post("/api/admin/detect-financings")
+def detect_financings(db: Session = Depends(get_db)):
+    """Backfill: run financing detection over every stored press release."""
+    from .jobs.nightly import _upsert_financing
+    from .services import financing as _fin
+    found = 0
+    for pr in db.execute(select(models.PressRelease).where(
+            models.PressRelease.company_id.is_not(None))).scalars():
+        f = _fin.parse_financing(f"{pr.headline} {pr.body or ''}")
+        if f:
+            _upsert_financing(db, pr.company_id, pr.published,
+                              pr.headline[:400], pr.url[:400], f)
+            found += 1
+    db.commit()
+    total = db.execute(select(models.Financing)).scalars().all()
+    return {"releases_matched": found, "financings_tracked": len(total)}
+
+
+# ------------------------------------------------- data quality / trust page
+@router.get("/api/data-quality")
+def data_quality(db: Session = Depends(get_db)):
+    """Coverage and freshness stats - the numbers a diligence team asks for."""
+    companies = db.execute(select(models.Company)).scalars().all()
+    n = len(companies)
+    def _count(model):
+        return len({r for r in db.execute(
+            select(model.company_id).distinct()).scalars()})
+    latest_price_day = db.execute(select(models.DailyPrice.day)
+        .order_by(_desc(models.DailyPrice.day)).limit(1)).scalar_one_or_none()
+    return {
+        "companies_tracked": n,
+        "with_price_history": _count(models.DailyPrice),
+        "with_financials": _count(models.FinancialSnapshot),
+        "with_warrant_tables": _count(models.WarrantTranche),
+        "with_share_history": _count(models.SharesHistory),
+        "with_dilution_grade": _count(models.DilutionGrade),
+        "financings_tracked": len(db.execute(select(models.Financing)).scalars().all()),
+        "press_releases_stored": len(db.execute(select(models.PressRelease)).scalars().all()),
+        "latest_price_day": latest_price_day and latest_price_day.isoformat(),
+        "note": "Every financial figure stores its source filing URL for verification.",
+    }
