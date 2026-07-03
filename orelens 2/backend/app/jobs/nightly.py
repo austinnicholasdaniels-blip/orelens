@@ -20,6 +20,8 @@ from ..models import (
     PressRelease, DrillResult, DrillProgram, DilutionGrade, SharesHistory,
 )
 from ..services import ingest, drill_parser
+from ..services import financing as _fin
+from ..models import Financing
 from ..services.grading import GradeInput, TrancheIn, compute_grade
 
 log = logging.getLogger("orelens.nightly")
@@ -55,6 +57,40 @@ async def sync_prices(db: Session) -> None:
     db.commit()
 
 
+def _upsert_financing(db: Session, company_id: int, published, headline: str,
+                      url: str, f: dict) -> None:
+    from datetime import timedelta as _td
+    pub_date = published.date() if hasattr(published, "date") else published
+    if f["is_close"]:
+        # try to close out a matching open announcement
+        open_fin = db.execute(
+            select(Financing).where(Financing.company_id == company_id,
+                                    Financing.closed.is_(False))
+            .order_by(Financing.announced.desc()).limit(1)).scalar_one_or_none()
+        if open_fin:
+            open_fin.closed = True
+            open_fin.close_date = pub_date
+            open_fin.hold_expiry = pub_date + _td(days=122)  # ~4 months + 1 day
+            open_fin.amount = f["amount"] or open_fin.amount
+            open_fin.price_per_unit = f["price_per_unit"] or open_fin.price_per_unit
+            open_fin.warrant_strike = f["warrant_strike"] or open_fin.warrant_strike
+            return
+        db.add(Financing(company_id=company_id, announced=pub_date, closed=True,
+                         close_date=pub_date, hold_expiry=pub_date + _td(days=122),
+                         amount=f["amount"], price_per_unit=f["price_per_unit"],
+                         warrant_strike=f["warrant_strike"], kind=f["kind"],
+                         headline=headline, source_url=url))
+    else:
+        dup = db.execute(
+            select(Financing).where(Financing.company_id == company_id,
+                                    Financing.announced == pub_date)).scalars().first()
+        if not dup:
+            db.add(Financing(company_id=company_id, announced=pub_date,
+                             amount=f["amount"], price_per_unit=f["price_per_unit"],
+                             warrant_strike=f["warrant_strike"], kind=f["kind"],
+                             headline=headline, source_url=url))
+
+
 async def sync_newswires(db: Session) -> dict:
     import re as _re
     tickers = {c.ticker: c.id for c in db.execute(select(Company)).scalars()}
@@ -87,6 +123,11 @@ async def sync_newswires(db: Session) -> dict:
         db.add(pr)
         stored += 1
 
+        if company_id:
+            f = _fin.parse_financing(text)
+            if f:
+                _upsert_financing(db, company_id, item["published"],
+                                  item["headline"][:400], item["url"][:400], f)
         if company_id:
             program = db.execute(
                 select(DrillProgram).where(DrillProgram.company_id == company_id,
