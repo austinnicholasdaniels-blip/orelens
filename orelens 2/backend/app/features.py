@@ -299,3 +299,11 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
             "drill_start": bool(r.is_drill_start),
         })
     return out[:100]
+
+
+# ------------------------------------------------- coiled-springs scanner
+@router.get("/api/scanners/coiled-springs")
+def coiled_springs(commodity: str | None = None, tier: str | None = None,
+                   db: Session = Depends(get_db)):
+    from .services import scanners as _sc
+    return _sc.scan_coiled_springs(db, commodity, tier)
