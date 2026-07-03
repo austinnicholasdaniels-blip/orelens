@@ -386,3 +386,60 @@ def data_quality(db: Session = Depends(get_db)):
         "latest_price_day": latest_price_day and latest_price_day.isoformat(),
         "note": "Every financial figure stores its source filing URL for verification.",
     }
+
+
+# --------------------------------------------- financing history backfill
+@router.post("/api/admin/backfill-financing-history")
+async def backfill_financing_history(days: int = 135, db: Session = Depends(get_db)):
+    """Scan the last ~4 months of news for every tracked company via Google
+    News RSS and extract placements/bought deals into the Financing table.
+    Captures financings on every wire, not just Newsfile."""
+    import asyncio as _aio
+    import feedparser as _fp
+    from datetime import datetime as _dt, timedelta as _td
+    from .jobs.nightly import _upsert_financing
+    from .services import financing as _finmod
+
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
+    cutoff = _dt.utcnow() - _td(days=days)
+    per_company, total = {}, 0
+
+    companies = db.execute(select(models.Company)).scalars().all()
+    async with _httpx.AsyncClient(timeout=25, headers=ua,
+                                  follow_redirects=True) as client:
+        for c in companies:
+            from urllib.parse import quote_plus as _qp
+            q = f'"{c.name}" ("private placement" OR "bought deal" OR "offering") when:{days}d'
+            url = (f"https://news.google.com/rss/search?q={_qp(q)}"
+                   "&hl=en-CA&gl=CA&ceid=CA:en")
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                feed = _fp.parse(r.content)
+            except Exception:  # noqa: BLE001
+                continue
+            found = 0
+            for e in feed.entries[:15]:
+                title = e.get("title", "")
+                pub = (_dt(*e.published_parsed[:6])
+                       if e.get("published_parsed") else None)
+                if not pub or pub < cutoff:
+                    continue
+                parsed = _finmod.parse_financing(title)
+                if not parsed:
+                    continue
+                _upsert_financing(db, c.id, pub, title[:400],
+                                  e.get("link", "")[:400], parsed)
+                found += 1
+            if found:
+                per_company[c.ticker] = found
+                total += found
+            await _aio.sleep(0.35)   # be polite to Google News
+    db.commit()
+    fins = db.execute(select(models.Financing)).scalars().all()
+    closed = [x for x in fins if x.closed]
+    return {"companies_scanned": len(companies), "headlines_matched": total,
+            "financings_tracked": len(fins), "closed_with_hold_expiry": len(closed),
+            "hits_by_ticker": per_company}
