@@ -164,4 +164,38 @@ def fetch_wire_items() -> list[dict]:
                 })
         except Exception as exc:  # noqa: BLE001 — a dead feed must not kill the run
             log.error("feed %s failed: %s", wire, exc)
+    if not items:
+        # Fallback: scrape the public mining-metals page (holds ~2 years of
+        # releases) so the news pipeline can never come back empty.
+        items = _scrape_newsfile_page(ua)
+    return items
+
+
+NEWSFILE_PAGE = "https://www.newsfilecorp.com/news/mining-metals"
+import re as _re2
+
+
+def _scrape_newsfile_page(ua: dict) -> list[dict]:
+    try:
+        resp = httpx.get(NEWSFILE_PAGE, headers=ua, timeout=25, follow_redirects=True)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as exc:  # noqa: BLE001
+        log.error("newsfile page scrape failed: %s", exc)
+        return []
+    items, seen = [], set()
+    # release links look like /release/312345/Some-Title-Here
+    for m in _re2.finditer(r'href="(/release/(\d+)/[^"]+)"[^>]*>([^<]{15,300})<', html):
+        path, rid, title = m.group(1), m.group(2), m.group(3).strip()
+        if rid in seen or not title:
+            continue
+        seen.add(rid)
+        items.append({
+            "wire": "Newsfile Mining",
+            "headline": title,
+            "url": f"https://www.newsfilecorp.com{path}",
+            "published": datetime.utcnow(),
+            "summary": "",
+        })
+    log.info("newsfile page scrape: %d releases", len(items))
     return items
