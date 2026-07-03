@@ -279,12 +279,13 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
                       .limit(150)).scalars().all()
     companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
     out = []
-    legacy_general_wires = {"PRNewswire", "Accesswire"}
     for r in rows:
         c = companies.get(r.company_id)
-        # hide everything collected from the old all-industries feeds -
-        # their loose ticker matching produced false positives
-        if r.wire in legacy_general_wires:
+        # bulletproof display rule: only rows from the Newsfile mining
+        # industry feeds ever show. Kills all junk from the old PRNewswire /
+        # Accesswire / GlobeNewswire general feeds (including rows those
+        # feeds false-matched to tracked tickers) without a database purge.
+        if not r.wire.startswith("Newsfile"):
             continue
         if commodity and (not c or c.commodity != commodity):
             continue
