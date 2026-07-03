@@ -11,6 +11,7 @@ const TABS = [
   { id: "news", label: "News" },
   { id: "value-momentum", label: "Best Bang-for-Buck" },
   { id: "most-dilutive", label: "Most Dilutive" },
+  { id: "coiled-springs", label: "Coiled Springs" },
   { id: "active-drills", label: "Active Drill Programs" },
   { id: "high-grade-breakouts", label: "High-Grade Breakouts" },
 ] as const;
@@ -39,10 +40,16 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "shares_added_m", label: "New Shares (M)" }, { key: "total_growth_pct", label: "Total Growth %" },
     { key: "as_of", label: "As Of Quarter" }, { key: "grade", label: "Grade" },
   ],
+  "coiled-springs": [
+    { key: "ticker", label: "Ticker" }, { key: "price", label: "Price" },
+    { key: "off_high_pct", label: "Off 90d High %" }, { key: "vol_surge_x", label: "Vol Surge x" },
+    { key: "ret_20d_pct", label: "20d Return %" }, { key: "qoq_dilution_pct", label: "QoQ Dilution %" },
+    { key: "score", label: "Score" }, { key: "grade", label: "Grade" },
+  ],
   "active-drills": [
     { key: "ticker", label: "Ticker" }, { key: "project", label: "Project" },
-    { key: "commodity", label: "Commodity" }, { key: "rigs_active", label: "Rigs" },
-    { key: "planned_meters", label: "Planned m" }, { key: "runway_m", label: "Runway (mo)" },
+    { key: "signal", label: "Why Active" }, { key: "last_activity", label: "Last Activity" },
+    { key: "rigs_active", label: "Rigs" }, { key: "runway_m", label: "Runway (mo)" },
     { key: "grade", label: "Grade" },
   ],
   "high-grade-breakouts": [
@@ -55,7 +62,8 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 const EMPTY: Record<string, string> = {
   "news": "No press releases collected yet today. The wire sync runs nightly at 11 PM ET - or trigger it any time via POST /api/jobs/nightly.",
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
-  "active-drills": "No companies with drill-start news in the last 45 days. This fills as the nightly news sync runs.",
+  "coiled-springs": "No coiled springs right now: nothing is holding near its 90-day high with building volume and a clean share structure. These setups are rare by design - when one appears, pay attention.",
+  "active-drills": "No active drill programs detected: no drill-start news or published results in the last 5 months, and no programs flagged ongoing. Fills as the nightly news sync accumulates.",
   "high-grade-breakouts": "No benchmark-beating intercepts with volume breakouts recently. These are rare by design.",
 };
 
