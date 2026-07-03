@@ -12,6 +12,7 @@ const TABS = [
   { id: "value-momentum", label: "Best Bang-for-Buck" },
   { id: "most-dilutive", label: "Most Dilutive" },
   { id: "coiled-springs", label: "Coiled Springs" },
+  { id: "unlock-calendar", label: "Unlock Calendar" },
   { id: "active-drills", label: "Active Drill Programs" },
   { id: "high-grade-breakouts", label: "High-Grade Breakouts" },
 ] as const;
@@ -46,6 +47,12 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "ret_20d_pct", label: "20d Return %" }, { key: "qoq_dilution_pct", label: "QoQ Dilution %" },
     { key: "score", label: "Score" }, { key: "grade", label: "Grade" },
   ],
+  "unlock-calendar": [
+    { key: "ticker", label: "Ticker" }, { key: "kind", label: "Type" },
+    { key: "amount_m", label: "Raise ($M)" }, { key: "price", label: "Unit Price" },
+    { key: "est_shares_m", label: "Est. Shares (M)" }, { key: "warrant_strike", label: "Wt Strike" },
+    { key: "hold_expiry", label: "Free-Trading Date" }, { key: "days_until", label: "Days Until" },
+  ],
   "active-drills": [
     { key: "ticker", label: "Ticker" }, { key: "project", label: "Project" },
     { key: "signal", label: "Why Active" }, { key: "last_activity", label: "Last Activity" },
@@ -60,6 +67,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 const EMPTY: Record<string, string> = {
+  "unlock-calendar": "No tracked financings approaching their 4-month hold expiry. This fills automatically as placement closings cross the wire.",
   "news": "No press releases collected yet today. The wire sync runs nightly at 11 PM ET - or trigger it any time via POST /api/jobs/nightly.",
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
   "coiled-springs": "No coiled springs right now: nothing is holding near its 90-day high with building volume and a clean share structure. These setups are rare by design - when one appears, pay attention.",
@@ -206,6 +214,10 @@ export default function Dashboard() {
                   ) : c.key === "change_pct" ? (
                     <span className={r.change_pct == null ? "text-ash" : r.change_pct >= 0 ? "text-oxide" : "text-hazard"}>
                       {r.change_pct == null ? "-" : (r.change_pct > 0 ? "+" : "") + r.change_pct + "%"}
+                    </span>
+                  ) : c.key === "days_until" ? (
+                    <span className={r.days_until <= 14 ? "text-hazard font-semibold" : r.days_until <= 45 ? "text-assay" : ""}>
+                      {r.days_until}
                     </span>
                   ) : c.key === "headline" ? (
                     <a href={r.url} target="_blank" rel="noopener noreferrer" className="hover:text-assay hover:underline">
