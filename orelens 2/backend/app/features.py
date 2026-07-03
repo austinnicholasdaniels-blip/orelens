@@ -282,9 +282,9 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
     legacy_general_wires = {"PRNewswire", "Accesswire"}
     for r in rows:
         c = companies.get(r.company_id)
-        # hide rows collected from the old all-industries feeds unless they
-        # matched one of our mining companies
-        if r.wire in legacy_general_wires and not c:
+        # hide everything collected from the old all-industries feeds -
+        # their loose ticker matching produced false positives
+        if r.wire in legacy_general_wires:
             continue
         if commodity and (not c or c.commodity != commodity):
             continue
