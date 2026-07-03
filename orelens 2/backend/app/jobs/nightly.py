@@ -55,11 +55,13 @@ async def sync_prices(db: Session) -> None:
     db.commit()
 
 
-async def sync_newswires(db: Session) -> None:
+async def sync_newswires(db: Session) -> dict:
     import re as _re
     tickers = {c.ticker: c.id for c in db.execute(select(Company)).scalars()}
     names = {c.name.lower(): c.id for c in db.execute(select(Company)).scalars()}
-    for item in ingest.fetch_wire_items():
+    wire_items = ingest.fetch_wire_items()
+    stored = 0
+    for item in wire_items:
         if db.execute(select(PressRelease).where(PressRelease.url == item["url"])).scalar_one_or_none():
             continue
         text = f"{item['headline']} {item['summary']}"
@@ -83,6 +85,7 @@ async def sync_newswires(db: Session) -> None:
             is_drill_start=drill_parser.is_drill_start(text),
         )
         db.add(pr)
+        stored += 1
 
         if company_id:
             program = db.execute(
@@ -100,6 +103,7 @@ async def sync_newswires(db: Session) -> None:
                     source_url=item["url"][:400], raw_sentence=i.raw_sentence[:2000],
                 ))
     db.commit()
+    return {"feed_items": len(wire_items), "new_stored": stored}
 
 
 async def sync_filings(db: Session) -> None:
@@ -164,11 +168,12 @@ async def run_nightly() -> dict:
     try:
         await sync_prices(db)
         await sync_filings(db)
-        await sync_newswires(db)
+        wire_stats = await sync_newswires(db)
         run_grades(db)
     finally:
         db.close()
-    return {"started": started.isoformat(), "finished": datetime.utcnow().isoformat()}
+    return {"started": started.isoformat(), "finished": datetime.utcnow().isoformat(),
+            "newswire": wire_stats}
 
 
 if __name__ == "__main__":
