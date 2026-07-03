@@ -131,13 +131,14 @@ async def extract_capital_structure(filing_text: str) -> dict | None:
 # --------------------------------------------------------------------------
 # C) Real-time news wire ingestion
 # --------------------------------------------------------------------------
-# Mining-only wires. Newsfile is the dominant junior-mining wire in Canada;
-# its official industry feeds carry the last 10 releases per category.
+# Newsfile is the dominant junior-mining wire in Canada; these are its
+# official industry feeds (verified at newsfilecorp.com/newscategories.php).
+# GlobeNewswire's mining subjectcode feed was dropped: it serves general
+# releases (verified 2026-07) and polluted the news tab.
 WIRE_FEEDS = {
     "Newsfile Mining": "https://feeds.newsfilecorp.com/industry/mining-metals",
     "Newsfile Precious": "https://feeds.newsfilecorp.com/industry/precious-metals",
     "Newsfile Energy Metals": "https://feeds.newsfilecorp.com/industry/energy-metals",
-    "GlobeNewswire": "https://www.globenewswire.com/RssFeed/subjectcode/13-Mining/feedTitle/GlobeNewswire%20-%20Mining",
 }
 
 
