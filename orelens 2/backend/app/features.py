@@ -279,8 +279,13 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
                       .limit(150)).scalars().all()
     companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
     out = []
+    legacy_general_wires = {"PRNewswire", "Accesswire"}
     for r in rows:
         c = companies.get(r.company_id)
+        # hide rows collected from the old all-industries feeds unless they
+        # matched one of our mining companies
+        if r.wire in legacy_general_wires and not c:
+            continue
         if commodity and (not c or c.commodity != commodity):
             continue
         if tier and (not c or c.jurisdiction_tier != tier):
