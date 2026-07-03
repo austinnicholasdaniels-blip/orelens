@@ -156,3 +156,22 @@ class SharesHistory(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     as_of: Mapped[date] = mapped_column(Date)
     shares: Mapped[float] = mapped_column(Float)
+
+
+class Financing(Base):
+    """A private placement / bought deal, tracked from announcement to close.
+    hold_expiry = close date + 4 months + 1 day (Canadian hold period):
+    the day this paper free-trades is a supply event."""
+    __tablename__ = "financings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    announced: Mapped[date] = mapped_column(Date)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    close_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    amount: Mapped[float | None] = mapped_column(Float, nullable=True)          # gross $
+    price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    warrant_strike: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hold_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    kind: Mapped[str] = mapped_column(String(40), default="private placement")
+    headline: Mapped[str] = mapped_column(String(400))
+    source_url: Mapped[str] = mapped_column(String(400))
