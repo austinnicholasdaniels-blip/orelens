@@ -65,11 +65,9 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
           <div className="bg-tray border border-hazard rounded-sm p-4">
             <p className="text-xs uppercase tracking-widest text-hazard mb-2">&#9888; Active Stock Promotion</p>
             <p className="text-sm">
-              {activePromo.firm ?? "Undisclosed firm"}
-              {activePromo.monthly_fee ? ` · $${(activePromo.monthly_fee / 1e3).toFixed(0)}K/mo` : ""}
-              {activePromo.amount ? ` · $${(activePromo.amount / 1e3).toFixed(0)}K total` : ""}
-              {activePromo.term_months ? ` · ${activePromo.term_months}-month term` : ""}
-              {activePromo.ends ? ` · runs until ${activePromo.ends}` : ""}
+              {activePromo.amount
+                ? `Disclosed paid promotion: $${Number(activePromo.amount).toLocaleString()}`
+                : "Disclosed paid promotion (amount not stated in disclosure headline)"}
             </p>
             <a href={activePromo.url} target="_blank" rel="noopener noreferrer" className="text-xs text-assay hover:underline">disclosure</a>
           </div>
