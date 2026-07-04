@@ -95,6 +95,14 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
         select(models.DrillProgram).where(models.DrillProgram.company_id == c.id,
                                           models.DrillProgram.active.is_(True))
     ).scalars().first()
+    promos = db.execute(
+        select(models.Promotion).where(models.Promotion.company_id == c.id)
+        .order_by(desc(models.Promotion.announced)).limit(10)
+    ).scalars().all()
+    cash_snaps = db.execute(
+        select(models.FinancialSnapshot).where(models.FinancialSnapshot.company_id == c.id)
+        .order_by(models.FinancialSnapshot.as_of)
+    ).scalars().all()
     fins = db.execute(
         select(models.Financing).where(models.Financing.company_id == c.id)
         .order_by(desc(models.Financing.announced)).limit(10)
@@ -166,6 +174,20 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
             "intercept": f"{r.grade:g} {r.unit} {r.commodity} over {r.width_m:g} m",
             "grade_meters": r.grade_meters, "above_benchmark": r.above_benchmark,
         } for r in results],
+        "cash_history": [
+            {"as_of": s.as_of.isoformat(), "cash": s.cash,
+             "change_pct": (round(100 * (s.cash - cash_snaps[i - 1].cash)
+                                  / cash_snaps[i - 1].cash, 1)
+                            if i and cash_snaps[i - 1].cash else None)}
+            for i, s in enumerate(cash_snaps)],
+        "promotions": [
+            {"announced": p.announced.isoformat(), "firm": p.firm,
+             "amount": p.amount, "monthly_fee": p.monthly_fee,
+             "term_months": p.term_months,
+             "ends": p.ends and p.ends.isoformat(),
+             "active": bool(p.ends and p.ends >= date.today()) or
+                       (not p.ends and (date.today() - p.announced).days <= 90),
+             "headline": p.headline, "url": p.source_url} for p in promos],
         "financings": [
             {"kind": f.kind, "announced": f.announced.isoformat(),
              "closed": f.closed,
