@@ -5,6 +5,7 @@ import PriceChart from "@/components/PriceChart";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
 import SharesHistoryChart from "@/components/SharesHistoryChart";
+import CashHistoryChart from "@/components/CashHistoryChart";
 import DrillTimeline from "@/components/DrillTimeline";
 
 export default function TickerPage({ params }: { params: { symbol: string } }) {
@@ -20,6 +21,8 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
 
   const { company, prices, grade, capital, warrants, program, drill_results, comparison } = data;
   const financings = data.financings ?? [];
+  const promotions = data.promotions ?? [];
+  const activePromo = promotions.find((p: any) => p.active);
   const today = new Date();
   const upcoming = financings.filter((f: any) => f.closed && f.hold_expiry && new Date(f.hold_expiry) >= today);
   const daysTo = (d: string) => Math.ceil((new Date(d).getTime() - today.getTime()) / 86400000);
@@ -44,6 +47,7 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
           <DilutionGauge grade={grade} />
           <WarrantOverhangMap warrants={warrants} />
           <SharesHistoryChart history={data.shares_history} />
+          <CashHistoryChart history={data.cash_history} />
         </div>
         <div className="space-y-6 h-fit">
         <div className="bg-tray border border-seam rounded-sm p-4">
@@ -57,6 +61,19 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
           </dl>
         </div>
 
+        {activePromo && (
+          <div className="bg-tray border border-hazard rounded-sm p-4">
+            <p className="text-xs uppercase tracking-widest text-hazard mb-2">&#9888; Active Stock Promotion</p>
+            <p className="text-sm">
+              {activePromo.firm ?? "Undisclosed firm"}
+              {activePromo.monthly_fee ? ` · $${(activePromo.monthly_fee / 1e3).toFixed(0)}K/mo` : ""}
+              {activePromo.amount ? ` · $${(activePromo.amount / 1e3).toFixed(0)}K total` : ""}
+              {activePromo.term_months ? ` · ${activePromo.term_months}-month term` : ""}
+              {activePromo.ends ? ` · runs until ${activePromo.ends}` : ""}
+            </p>
+            <a href={activePromo.url} target="_blank" rel="noopener noreferrer" className="text-xs text-assay hover:underline">disclosure</a>
+          </div>
+        )}
         <div className="bg-tray border border-seam rounded-sm p-4">
           <p className="text-xs uppercase tracking-widest text-ash mb-3">Financings &amp; Unlocks</p>
           {upcoming.map((f: any, i: number) => (
