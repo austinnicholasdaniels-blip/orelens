@@ -1092,3 +1092,43 @@ async def scan_promotions_market_v3(days: int = 365, db: Session = Depends(get_d
     promos = db.execute(select(models.Promotion)).scalars().all()
     stats["promotions_tracked_total"] = len(promos)
     return stats
+
+
+# ---------------------------------------------------- promotion dedupe pass
+@router.post("/api/admin/dedupe-promotions")
+def dedupe_promotions(db: Session = Depends(get_db)):
+    """Collapse syndicated copies: per company, promotions with the same firm,
+    the same amount, or announced within 21 days of each other are one deal.
+    Keeps the most complete row and merges fields from the copies."""
+    from collections import defaultdict
+    removed = 0
+    by_company = defaultdict(list)
+    for p in db.execute(select(models.Promotion)).scalars():
+        by_company[p.company_id].append(p)
+    for rows in by_company.values():
+        rows.sort(key=lambda r: (r.amount is None, r.firm is None,
+                                 -(r.announced.toordinal())))
+        kept: list = []
+        for r in rows:
+            merged = False
+            for k in kept:
+                same_firm = bool(r.firm and k.firm and
+                                 r.firm.lower() == k.firm.lower())
+                same_amount = bool(r.amount and k.amount and
+                                   abs(r.amount - k.amount) < 0.01 * k.amount + 1)
+                close_dates = abs((k.announced - r.announced).days) <= 21
+                if same_firm or same_amount or close_dates:
+                    k.firm = k.firm or r.firm
+                    k.amount = k.amount or r.amount
+                    k.monthly_fee = k.monthly_fee or r.monthly_fee
+                    k.term_months = k.term_months or r.term_months
+                    k.ends = k.ends or r.ends
+                    db.delete(r)
+                    removed += 1
+                    merged = True
+                    break
+            if not merged:
+                kept.append(r)
+    db.commit()
+    remaining = len(db.execute(select(models.Promotion)).scalars().all())
+    return {"duplicates_removed": removed, "promotions_remaining": remaining}
