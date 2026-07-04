@@ -88,6 +88,7 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     setError("");
+    setRows([]);   // clear immediately so one tab's rows never flash under another tab's columns
     const params: Record<string, string> = {};
     if (commodity) params.commodity = commodity;
     if (tier) params.tier = tier;
@@ -194,7 +195,7 @@ export default function Dashboard() {
           <tr>
             {cols.map((c) => (
               <th key={c.key} className="cursor-pointer select-none"
-                onClick={() => setSort((s) => ({ key: c.key, dir: s.key === c.key ? ((-s.dir) as 1 | -1) : -1 }))}>
+                onClick={() => setSort((s) => ({ key: c.key, dir: s.key === c.key ? ((-s.dir) as 1 | -1) : (["days_until", "hold_expiry", "last_activity"].includes(c.key) ? 1 : -1) }))}>
                 {c.label}{sort.key === c.key ? (sort.dir === -1 ? " v" : " ^") : ""}
               </th>
             ))}
