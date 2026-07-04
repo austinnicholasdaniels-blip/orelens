@@ -22,13 +22,13 @@ def ysym(ticker: str, exchange: str) -> str:
 
 
 def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
-    """Returns {prices, shares_outstanding, cash, monthly_burn, shares_history}.
+    """Returns {prices: [{date, close, volume}], shares_outstanding, cash, monthly_burn}.
     Any piece that fails comes back as None/empty — never raises."""
     import yfinance as yf
     import pandas as pd
 
     sym = ysym(ticker, exchange)
-    out = {"prices": [], "shares_outstanding": None, "cash": None,
+    out = {"prices": [], "shares_outstanding": None, "cash": None, "cash_history": [],
            "monthly_burn": None, "shares_history": []}
     t = yf.Ticker(sym)
 
@@ -76,6 +76,9 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
                 v = qbs.loc[label].dropna()
                 if len(v):
                     out["cash"] = float(v.iloc[0])
+                    out["cash_history"] = [
+                        {"as_of": idx.date() if hasattr(idx, "date") else idx,
+                         "cash": float(val)} for idx, val in v.items()]
                     break
     except Exception as exc:  # noqa: BLE001
         log.warning("balance sheet %s failed: %s", sym, exc)
