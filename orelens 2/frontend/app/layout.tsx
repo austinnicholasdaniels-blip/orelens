@@ -23,7 +23,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <span className="text-xs text-ash uppercase tracking-widest hidden sm:inline">
             Dilution · Warrants · Drill Results
           </span>
-          <span className="ml-auto text-xs text-ash font-mono">nightly sync 23:00 EST</span>
+          <nav className="ml-auto flex items-baseline gap-5 text-sm">
+            <a href="/dashboard" className="text-bone hover:text-assay">Scanners</a>
+            <a href="/news" className="text-bone hover:text-assay">News</a>
+            <span className="text-xs text-ash font-mono hidden md:inline">nightly sync 23:00 EST</span>
+          </nav>
         </header>
         <main className="px-6 py-6 max-w-7xl mx-auto">{children}</main>
       </body>
