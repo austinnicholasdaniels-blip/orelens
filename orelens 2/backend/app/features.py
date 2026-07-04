@@ -443,3 +443,92 @@ async def backfill_financing_history(days: int = 135, db: Session = Depends(get_
     return {"companies_scanned": len(companies), "headlines_matched": total,
             "financings_tracked": len(fins), "closed_with_hold_expiry": len(closed),
             "hits_by_ticker": per_company}
+
+
+# ------------------------------------------------- stock promotions scanner
+@router.get("/api/scanners/stock-promotions")
+def stock_promotions(commodity: str | None = None, tier: str | None = None,
+                     db: Session = Depends(get_db)):
+    """Disclosed investor-awareness / IR engagements from the last ~5 months.
+    Paid promotion + tight float is the classic junior setup - watch for it."""
+    from datetime import timedelta as _td
+    today = date.today()
+    out = []
+    for p in db.execute(select(models.Promotion).where(
+            models.Promotion.announced >= today - _td(days=160))
+            .order_by(_desc(models.Promotion.announced))).scalars():
+        c = db.get(models.Company, p.company_id)
+        if not c:
+            continue
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        if p.ends:
+            status = "ACTIVE" if p.ends >= today else "Expired"
+        else:
+            status = "ACTIVE (term undisclosed)" if (today - p.announced).days <= 90 else "Unknown"
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "firm": p.firm, "amount": p.amount and round(p.amount, 0),
+            "monthly_fee": p.monthly_fee and round(p.monthly_fee, 0),
+            "term_months": p.term_months,
+            "announced": p.announced.isoformat(),
+            "ends": p.ends and p.ends.isoformat(),
+            "status": status, "headline": p.headline, "url": p.source_url,
+        })
+    out.sort(key=lambda x: not x["status"].startswith("ACTIVE"))
+    return out
+
+
+@router.post("/api/admin/backfill-promotions")
+async def backfill_promotions(days: int = 150, db: Session = Depends(get_db)):
+    """Scan ~5 months of news per company via Google News RSS for disclosed
+    investor-awareness / IR / marketing engagements."""
+    import asyncio as _aio
+    import feedparser as _fp
+    from datetime import datetime as _dt, timedelta as _td
+    from urllib.parse import quote_plus as _qp
+    from .jobs.nightly import _upsert_promotion
+    from .services import promotion as _promo
+
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
+    cutoff = _dt.utcnow() - _td(days=days)
+    per_company, total = {}, 0
+    companies = db.execute(select(models.Company)).scalars().all()
+    async with _httpx.AsyncClient(timeout=25, headers=ua,
+                                  follow_redirects=True) as client:
+        for c in companies:
+            q = (f'"{c.name}" ("investor awareness" OR "investor relations" '
+                 f'OR "marketing services" OR "market awareness") when:{days}d')
+            url = (f"https://news.google.com/rss/search?q={_qp(q)}"
+                   "&hl=en-CA&gl=CA&ceid=CA:en")
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                feed = _fp.parse(r.content)
+            except Exception:  # noqa: BLE001
+                continue
+            found = 0
+            for e in feed.entries[:15]:
+                title = e.get("title", "")
+                pub = (_dt(*e.published_parsed[:6])
+                       if e.get("published_parsed") else None)
+                if not pub or pub < cutoff:
+                    continue
+                parsed = _promo.parse_promotion(title)
+                if not parsed:
+                    continue
+                _upsert_promotion(db, c.id, pub, title[:400],
+                                  e.get("link", "")[:400], parsed)
+                found += 1
+            if found:
+                per_company[c.ticker] = found
+                total += found
+            await _aio.sleep(0.35)
+    db.commit()
+    promos = db.execute(select(models.Promotion)).scalars().all()
+    return {"companies_scanned": len(companies), "headlines_matched": total,
+            "promotions_tracked": len(promos), "hits_by_ticker": per_company}
