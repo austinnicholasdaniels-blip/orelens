@@ -199,3 +199,18 @@ def _scrape_newsfile_page(ua: dict) -> list[dict]:
         })
     log.info("newsfile page scrape: %d releases", len(items))
     return items
+
+
+def fetch_release_text(url: str) -> str:
+    """Fetch a press-release page and return its text for deep parsing."""
+    from .promotion import html_to_text
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
+    try:
+        resp = httpx.get(url, headers=ua, timeout=25, follow_redirects=True)
+        resp.raise_for_status()
+        return html_to_text(resp.text)[:60_000]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("release fetch failed %s: %s", url[:80], exc)
+        return ""
