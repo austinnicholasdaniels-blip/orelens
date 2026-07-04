@@ -86,6 +86,14 @@ def _upsert_financing(db: Session, company_id: int, published, headline: str,
             open_fin.price_per_unit = f["price_per_unit"] or open_fin.price_per_unit
             open_fin.warrant_strike = f["warrant_strike"] or open_fin.warrant_strike
             return
+        # syndication/dup guard for closes: same company + same amount = same deal
+        for ex in db.execute(select(Financing).where(
+                Financing.company_id == company_id,
+                Financing.closed.is_(True))).scalars():
+            if f["amount"] and ex.amount and abs(f["amount"] - ex.amount) < 0.01 * ex.amount + 1:
+                return
+            if ex.close_date and abs((ex.close_date - pub_date).days) <= 5:
+                return
         db.add(Financing(company_id=company_id, announced=pub_date, closed=True,
                          close_date=pub_date, hold_expiry=pub_date + _td(days=122),
                          amount=f["amount"], price_per_unit=f["price_per_unit"],
@@ -108,17 +116,24 @@ def _upsert_promotion(db: Session, company_id: int, published, headline: str,
     pub_date = published.date() if hasattr(published, "date") else published
     ends = (pub_date + _td(days=int(p["term_months"] * 30.4))
             if p.get("term_months") else None)
-    dup = db.execute(select(Promotion).where(
-        Promotion.company_id == company_id,
-        Promotion.announced == pub_date)).scalars().first()
-    if dup:
-        # enrich: deep scans fill fields the headline pass missed
-        dup.firm = dup.firm or p.get("firm")
-        dup.amount = dup.amount or p.get("amount")
-        dup.monthly_fee = dup.monthly_fee or p.get("monthly_fee")
-        dup.term_months = dup.term_months or p.get("term_months")
-        dup.ends = dup.ends or ends
-        return
+    # syndication guard: the same engagement gets republished by multiple
+    # outlets on different days. Same company + (same firm OR same amount OR
+    # announced within 21 days) = the same deal, not a new one.
+    for ex in db.execute(select(Promotion).where(
+            Promotion.company_id == company_id)).scalars():
+        same_firm = bool(p.get("firm") and ex.firm and
+                         p["firm"].lower() == ex.firm.lower())
+        same_amount = bool(p.get("amount") and ex.amount and
+                           abs(p["amount"] - ex.amount) < 0.01 * ex.amount + 1)
+        close_dates = abs((ex.announced - pub_date).days) <= 21
+        if same_firm or same_amount or close_dates:
+            ex.firm = ex.firm or p.get("firm")
+            ex.amount = ex.amount or p.get("amount")
+            ex.monthly_fee = ex.monthly_fee or p.get("monthly_fee")
+            if not ex.term_months and p.get("term_months"):
+                ex.term_months = p["term_months"]
+                ex.ends = ex.announced + _td(days=int(p["term_months"] * 30.4))
+            return
     db.add(Promotion(company_id=company_id, announced=pub_date,
                      firm=p.get("firm"), amount=p.get("amount"),
                      monthly_fee=p.get("monthly_fee"),
@@ -159,21 +174,11 @@ async def sync_newswires(db: Session) -> dict:
         stored += 1
 
         if company_id:
-            # if the headline smells like a financing or a promotion, fetch the
-            # FULL release page - terms live in the body, not the headline
-            deep = text
-            hint = _re.search(
-                r"placement|bought deal|offering|investor|awareness|marketing|"
-                r"engag|relations", text, _re.I)
-            if hint and item["url"]:
-                full = ingest.fetch_release_text(item["url"])
-                if len(full) > len(text):
-                    deep = full
-            f = _fin.parse_financing(deep)
+            f = _fin.parse_financing(text)
             if f:
                 _upsert_financing(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], f)
-            pmo = _promo.parse_promotion(deep)
+            pmo = _promo.parse_promotion(text)
             if pmo:
                 _upsert_promotion(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], pmo)
@@ -199,9 +204,6 @@ async def sync_newswires(db: Session) -> dict:
 async def sync_filings(db: Session) -> None:
     """For each issuer: pull new MD&A / interim financials, extract cash, burn,
     and the warrant table via the LLM pass, and persist a snapshot."""
-    # SEDAR+ access is issuer-by-issuer (RSS or commercial mirror) — plug the
-    # per-issuer feed URL into Company metadata when you build the universe.
-    # EDGAR path shown in ingest.fetch_edgar_recent for dual-listed names.
     log.info("filings sync: wire your SEDAR+ feed source here")
 
 
