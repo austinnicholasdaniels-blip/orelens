@@ -21,6 +21,8 @@ from ..models import (
 )
 from ..services import ingest, drill_parser
 from ..services import financing as _fin
+from ..services import promotion as _promo
+from ..models import Promotion
 from ..models import Financing
 from ..services.grading import GradeInput, TrancheIn, compute_grade
 
@@ -48,6 +50,15 @@ async def sync_prices(db: Session) -> None:
                               close=quote["close"], volume=quote["volume"] or 0))
         if quote.get("shares_outstanding"):
             c.shares_outstanding = quote["shares_outstanding"]
+        for ch in data.get("cash_history", []):
+            exists_fs = db.execute(select(FinancialSnapshot).where(
+                FinancialSnapshot.company_id == c.id,
+                FinancialSnapshot.as_of == ch["as_of"])).scalars().first()
+            if not exists_fs:
+                db.add(FinancialSnapshot(
+                    company_id=c.id, as_of=ch["as_of"], cash=ch["cash"],
+                    monthly_burn=data.get("monthly_burn") or 0.0,
+                    source_filing="Yahoo quarterly balance sheet"))
         for sh in data.get("shares_history", []):
             if not db.execute(select(SharesHistory).where(
                     SharesHistory.company_id == c.id,
@@ -91,6 +102,24 @@ def _upsert_financing(db: Session, company_id: int, published, headline: str,
                              headline=headline, source_url=url))
 
 
+def _upsert_promotion(db: Session, company_id: int, published, headline: str,
+                      url: str, p: dict) -> None:
+    from datetime import timedelta as _td
+    pub_date = published.date() if hasattr(published, "date") else published
+    dup = db.execute(select(Promotion).where(
+        Promotion.company_id == company_id,
+        Promotion.announced == pub_date)).scalars().first()
+    if dup:
+        return
+    ends = (pub_date + _td(days=int(p["term_months"] * 30.4))
+            if p.get("term_months") else None)
+    db.add(Promotion(company_id=company_id, announced=pub_date,
+                     firm=p.get("firm"), amount=p.get("amount"),
+                     monthly_fee=p.get("monthly_fee"),
+                     term_months=p.get("term_months"), ends=ends,
+                     headline=headline, source_url=url))
+
+
 async def sync_newswires(db: Session) -> dict:
     import re as _re
     tickers = {c.ticker: c.id for c in db.execute(select(Company)).scalars()}
@@ -128,6 +157,10 @@ async def sync_newswires(db: Session) -> dict:
             if f:
                 _upsert_financing(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], f)
+            pmo = _promo.parse_promotion(text)
+            if pmo:
+                _upsert_promotion(db, company_id, item["published"],
+                                  item["headline"][:400], item["url"][:400], pmo)
         if company_id:
             program = db.execute(
                 select(DrillProgram).where(DrillProgram.company_id == company_id,
