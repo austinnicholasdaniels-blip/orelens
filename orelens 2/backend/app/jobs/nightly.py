@@ -106,13 +106,19 @@ def _upsert_promotion(db: Session, company_id: int, published, headline: str,
                       url: str, p: dict) -> None:
     from datetime import timedelta as _td
     pub_date = published.date() if hasattr(published, "date") else published
+    ends = (pub_date + _td(days=int(p["term_months"] * 30.4))
+            if p.get("term_months") else None)
     dup = db.execute(select(Promotion).where(
         Promotion.company_id == company_id,
         Promotion.announced == pub_date)).scalars().first()
     if dup:
+        # enrich: deep scans fill fields the headline pass missed
+        dup.firm = dup.firm or p.get("firm")
+        dup.amount = dup.amount or p.get("amount")
+        dup.monthly_fee = dup.monthly_fee or p.get("monthly_fee")
+        dup.term_months = dup.term_months or p.get("term_months")
+        dup.ends = dup.ends or ends
         return
-    ends = (pub_date + _td(days=int(p["term_months"] * 30.4))
-            if p.get("term_months") else None)
     db.add(Promotion(company_id=company_id, announced=pub_date,
                      firm=p.get("firm"), amount=p.get("amount"),
                      monthly_fee=p.get("monthly_fee"),
@@ -153,11 +159,21 @@ async def sync_newswires(db: Session) -> dict:
         stored += 1
 
         if company_id:
-            f = _fin.parse_financing(text)
+            # if the headline smells like a financing or a promotion, fetch the
+            # FULL release page - terms live in the body, not the headline
+            deep = text
+            hint = _re.search(
+                r"placement|bought deal|offering|investor|awareness|marketing|"
+                r"engag|relations", text, _re.I)
+            if hint and item["url"]:
+                full = ingest.fetch_release_text(item["url"])
+                if len(full) > len(text):
+                    deep = full
+            f = _fin.parse_financing(deep)
             if f:
                 _upsert_financing(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], f)
-            pmo = _promo.parse_promotion(text)
+            pmo = _promo.parse_promotion(deep)
             if pmo:
                 _upsert_promotion(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], pmo)
