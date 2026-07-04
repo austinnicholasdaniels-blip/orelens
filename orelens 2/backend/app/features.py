@@ -532,3 +532,95 @@ async def backfill_promotions(days: int = 150, db: Session = Depends(get_db)):
     promos = db.execute(select(models.Promotion)).scalars().all()
     return {"companies_scanned": len(companies), "headlines_matched": total,
             "promotions_tracked": len(promos), "hits_by_ticker": per_company}
+
+
+# --------------------------------------- DEEP promotion scan (full release text)
+@router.post("/api/admin/backfill-promotions-deep")
+async def backfill_promotions_deep(days: int = 160, db: Session = Depends(get_db)):
+    """Accuracy pass: follow every candidate headline to the full release page
+    and parse firm / term / fees from the complete disclosure text. Also
+    re-fetches existing sparse rows to fill missing fields."""
+    import asyncio as _aio
+    import feedparser as _fp
+    from datetime import datetime as _dt, timedelta as _td
+    from urllib.parse import quote_plus as _qp
+    from .jobs.nightly import _upsert_promotion
+    from .services import promotion as _promo
+
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
+    cutoff = _dt.utcnow() - _td(days=days)
+    hint = ("investor", "awareness", "marketing", "relations", "engag",
+            "media", "advertis", "ir program", "digital")
+    stats = {"pages_fetched": 0, "promotions_found": 0, "rows_enriched": 0,
+             "hits_by_ticker": {}}
+
+    async def _page_text(client, url: str) -> str:
+        try:
+            r = await client.get(url)
+            r.raise_for_status()
+            return _promo.html_to_text(r.text)[:60_000]
+        except Exception:  # noqa: BLE001
+            return ""
+
+    companies = db.execute(select(models.Company)).scalars().all()
+    async with _httpx.AsyncClient(timeout=25, headers=ua,
+                                  follow_redirects=True) as client:
+        # pass 1: enrich existing sparse rows from their source pages
+        for row in db.execute(select(models.Promotion)).scalars():
+            if row.firm and (row.amount or row.monthly_fee) and row.term_months:
+                continue
+            text = await _page_text(client, row.source_url)
+            stats["pages_fetched"] += 1
+            parsed = _promo.parse_promotion(text) if text else None
+            if parsed:
+                row.firm = row.firm or parsed.get("firm")
+                row.amount = row.amount or parsed.get("amount")
+                row.monthly_fee = row.monthly_fee or parsed.get("monthly_fee")
+                if not row.term_months and parsed.get("term_months"):
+                    row.term_months = parsed["term_months"]
+                    row.ends = row.announced + _td(days=int(parsed["term_months"] * 30.4))
+                stats["rows_enriched"] += 1
+            await _aio.sleep(0.25)
+
+        # pass 2: per-company Google News, follow links, parse full text
+        for c in companies:
+            q = (f'"{c.name}" ("investor awareness" OR "investor relations" '
+                 f'OR "marketing" OR "market awareness") when:{days}d')
+            url = (f"https://news.google.com/rss/search?q={_qp(q)}"
+                   "&hl=en-CA&gl=CA&ceid=CA:en")
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                feed = _fp.parse(r.content)
+            except Exception:  # noqa: BLE001
+                continue
+            found = 0
+            for e in feed.entries[:10]:
+                title = e.get("title", "")
+                if not any(h in title.lower() for h in hint):
+                    continue
+                pub = (_dt(*e.published_parsed[:6])
+                       if e.get("published_parsed") else None)
+                if not pub or pub < cutoff:
+                    continue
+                text = await _page_text(client, e.get("link", ""))
+                stats["pages_fetched"] += 1
+                parsed = _promo.parse_promotion(text or title)
+                if not parsed:
+                    continue
+                _upsert_promotion(db, c.id, pub, title[:400],
+                                  e.get("link", "")[:400], parsed)
+                found += 1
+                await _aio.sleep(0.25)
+            if found:
+                stats["hits_by_ticker"][c.ticker] = found
+                stats["promotions_found"] += found
+            await _aio.sleep(0.2)
+    db.commit()
+    promos = db.execute(select(models.Promotion)).scalars().all()
+    complete = [p for p in promos if p.firm and (p.amount or p.monthly_fee)]
+    stats["promotions_tracked"] = len(promos)
+    stats["with_full_terms"] = len(complete)
+    return stats
