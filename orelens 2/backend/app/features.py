@@ -1,5 +1,6 @@
 """
-Site features: search and on-demand ticker adds.
+Site features: search, on-demand ticker adds, notable-holder scanners,
+and the AI ranking scanner (Claude API).
 """
 from __future__ import annotations
 import logging
@@ -106,9 +107,8 @@ class ExtractBody(BaseModel):
 
 @router.post("/api/admin/extract-filing")
 async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
-    """Fetch a filing (PDF or EDGAR HTML exhibit), extract cash / burn /
-    warrant & option tables with the Anthropic API, store them with the
-    filing URL as source, and re-grade."""
+    """Fetch a filing PDF, extract cash / burn / warrant & option tables with
+    the Anthropic API, store them with the filing URL as source, and re-grade."""
     from .services import ingest
     from sqlalchemy import delete as _delete
     from datetime import datetime as _dt
@@ -388,12 +388,35 @@ def data_quality(db: Session = Depends(get_db)):
     }
 
 
+# ---------------------------------------------------------- attribution guard
+_SUFFIX_WORDS = {"corp", "corp.", "corporation", "inc", "inc.", "incorporated",
+                 "ltd", "ltd.", "limited", "plc", "co", "co.", "company"}
+
+
+def _core_name(name: str) -> str:
+    words = [w for w in name.lower().replace(",", " ").split()
+             if w not in _SUFFIX_WORDS]
+    return " ".join(words)
+
+
+def _title_mentions(company, title: str) -> bool:
+    """A headline may only be attributed to a company if it actually names
+    the company (core name phrase) or cites its exchange ticker."""
+    import re as _re
+    t = title.lower()
+    core = _core_name(company.name)
+    if core and core in t:
+        return True
+    return bool(_re.search(
+        rf"\((?:TSX|TSXV|TSX-V|CSE|ASX|NYSE|OTCQ[BX])\s*:\s*{_re.escape(company.ticker)}\b",
+        title))
+
+
 # --------------------------------------------- financing history backfill
 @router.post("/api/admin/backfill-financing-history")
 async def backfill_financing_history(days: int = 135, db: Session = Depends(get_db)):
     """Scan the last ~4 months of news for every tracked company via Google
-    News RSS and extract placements/bought deals into the Financing table.
-    Captures financings on every wire, not just Newsfile."""
+    News RSS and extract placements/bought deals into the Financing table."""
     import asyncio as _aio
     import feedparser as _fp
     from datetime import datetime as _dt, timedelta as _td
@@ -427,6 +450,8 @@ async def backfill_financing_history(days: int = 135, db: Session = Depends(get_
                        if e.get("published_parsed") else None)
                 if not pub or pub < cutoff:
                     continue
+                if not _title_mentions(c, title):
+                    continue    # Google returned a related-but-different company
                 parsed = _finmod.parse_financing(title)
                 if not parsed:
                     continue
@@ -449,8 +474,7 @@ async def backfill_financing_history(days: int = 135, db: Session = Depends(get_
 @router.get("/api/scanners/stock-promotions")
 def stock_promotions(commodity: str | None = None, tier: str | None = None,
                      db: Session = Depends(get_db)):
-    """Disclosed investor-awareness / IR engagements from the last ~5 months.
-    Paid promotion + tight float is the classic junior setup - watch for it."""
+    """Disclosed investor-awareness / IR engagements from the last ~5 months."""
     from datetime import timedelta as _td
     today = date.today()
     out = []
@@ -518,6 +542,8 @@ async def backfill_promotions(days: int = 150, db: Session = Depends(get_db)):
                        if e.get("published_parsed") else None)
                 if not pub or pub < cutoff:
                     continue
+                if not _title_mentions(c, title):
+                    continue    # Google returned a related-but-different company
                 parsed = _promo.parse_promotion(title)
                 if not parsed:
                     continue
@@ -599,6 +625,8 @@ async def backfill_promotions_deep(days: int = 160, db: Session = Depends(get_db
             found = 0
             for e in feed.entries[:10]:
                 title = e.get("title", "")
+                if not _title_mentions(c, title):
+                    continue    # never attribute another company's news
                 if not any(h in title.lower() for h in hint):
                     continue
                 pub = (_dt(*e.published_parsed[:6])
@@ -624,3 +652,21 @@ async def backfill_promotions_deep(days: int = 160, db: Session = Depends(get_db
     stats["promotions_tracked"] = len(promos)
     stats["with_full_terms"] = len(complete)
     return stats
+
+
+@router.post("/api/admin/purge-misattributed")
+def purge_misattributed(db: Session = Depends(get_db)):
+    """Delete any stored financing or promotion whose headline does not
+    actually name its attributed company. Accuracy over volume, always."""
+    removed = {"financings": 0, "promotions": 0}
+    for model, key in ((models.Financing, "financings"),
+                       (models.Promotion, "promotions")):
+        for row in db.execute(select(model)).scalars().all():
+            c = db.get(models.Company, row.company_id)
+            if not c or not _title_mentions(c, row.headline):
+                db.delete(row)
+                removed[key] += 1
+    db.commit()
+    return {"removed": removed,
+            "financings_remaining": len(db.execute(select(models.Financing)).scalars().all()),
+            "promotions_remaining": len(db.execute(select(models.Promotion)).scalars().all())}
