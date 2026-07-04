@@ -9,24 +9,29 @@ TRIGGER_PAT = re.compile(
     r"investor awareness|investor relations (?:agreement|services|program|campaign)|"
     r"market(?:ing)? awareness|marketing (?:services|campaign|agreement)|"
     r"digital marketing|media campaign|advertising (?:campaign|services)|"
+    r"market making (?:services|agreement)|capital markets advisory|"
+    r"investor relations and capital markets|"
     r"engag\w+ .{0,60}(?:for )?investor", re.I)
 FIRM_PAT = re.compile(
     r"[Ee]ngag\w+\s+(?:of\s+)?([A-Z][A-Za-z0-9&.,'\- ]{2,60}?)\s+(?:to |for |as |in )")
 FIRM_PAT2 = re.compile(
-    r"(?i:agreement|contract|partnership) with\s+([A-Z][A-Za-z0-9&.,'\- ]{2,60}?)(?:[,.]|\s+(?:for|to)\b)")
+    r"(?i:agreement|contract|partnership)[^.]{0,45}? with\s+([A-Z][A-Za-z0-9&.,'\- ]{2,60}?)(?:[,.(]|\s+(?:for|to|an|a)\b)")
 FIRM_PAT3 = re.compile(
     r"(?:retained|services of|engagement of)\s+([A-Z][A-Za-z0-9&.,'\- ]{2,60}?)(?:[,.(]|\s+(?:to|for|as)\b)")
 TERM_PAT = re.compile(
-    r"(?:term of|period of|for)\s+(?:approximately\s+)?"
-    r"(one|two|three|four|five|six|nine|twelve|\d{1,2})[\s-]*(month|year)", re.I)
+    r"(?:term of|period of|for|\ba)\s+(?:approximately\s+)?"
+    r"(one|two|three|four|five|six|nine|twelve|\d{1,2})\s*(?:\(\d+\))?[\s-]*(month|year)", re.I)
 MONTHLY_PAT = re.compile(
     r"(?:monthly (?:fee|payment|cash fee) of|per month[^$]{0,15})\s*(?:C|US)?\$\s*([\d,]+(?:\.\d+)?)"
     r"|(?:C|US)?\$\s*([\d,]+(?:\.\d+)?)\s*per month", re.I)
 TOTAL_PAT = re.compile(
     r"(?:aggregate|total(?: consideration| fee| cost)? of|budget of|consideration of|cash fee of|compensation of|fees? of)\s*(?:up to\s*)?"
     r"(?:C|US)?\$\s*([\d,]+(?:\.\d+)?)\s*(million|M\b)?", re.I)
-WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-         "six": 6, "nine": 9, "twelve": 12}
+WEEKS_PAT = re.compile(
+    r"(?:term of|period of|for|\ba)\s+(?:approximately\s+)?"
+    r"(one|two|three|four|five|six|eight|ten|twelve|\d{1,2})\s*(?:\(\d+\))?[\s-]*weeks?", re.I)
+WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+         "eight": 8, "nine": 9, "ten": 10, "twelve": 12}
 
 
 def parse_promotion(text: str) -> dict | None:
@@ -38,6 +43,10 @@ def parse_promotion(text: str) -> dict | None:
     fm = FIRM_PAT.search(text) or FIRM_PAT2.search(text) or FIRM_PAT3.search(text)
     if fm:
         firm = fm.group(1).strip(" ,.")
+        parts = firm.split()
+        while parts and parts[-1][0].islower() and parts[-1] not in ("of", "and"):
+            parts.pop()
+        firm = " ".join(parts) or None
 
     term_months = None
     tm = TERM_PAT.search(text)
@@ -45,8 +54,12 @@ def parse_promotion(text: str) -> dict | None:
         n = WORDS.get(tm.group(1).lower()) or int(tm.group(1))
         term_months = n * 12 if tm.group(2).lower().startswith("year") else n
     else:
+        wm = WEEKS_PAT.search(text)
         dm = re.search(r"(?:term of|period of|for)\s+(\d{2,3})[\s-]*days?", text, re.I)
-        if dm:
+        if wm:
+            n = WORDS.get(wm.group(1).lower()) or int(wm.group(1))
+            term_months = round(n / 4.33, 1)
+        elif dm:
             term_months = round(int(dm.group(1)) / 30.4, 1)
 
     monthly = None
