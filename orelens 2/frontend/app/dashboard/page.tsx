@@ -55,10 +55,8 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "hold_expiry", label: "Free-Trading Date" }, { key: "days_until", label: "Days Until" },
   ],
   "stock-promotions": [
-    { key: "ticker", label: "Ticker" }, { key: "firm", label: "Promotion Firm" },
-    { key: "amount", label: "Total ($)" }, { key: "monthly_fee", label: "Monthly ($)" },
-    { key: "term_months", label: "Term (mo)" }, { key: "announced", label: "Announced" },
-    { key: "ends", label: "Ends" }, { key: "status", label: "Status" },
+    { key: "ticker", label: "Ticker" }, { key: "name", label: "Company" },
+    { key: "amount", label: "Paid ($)" }, { key: "status", label: "Status" },
   ],
   "active-drills": [
     { key: "ticker", label: "Ticker" }, { key: "project", label: "Project" },
@@ -74,7 +72,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 const EMPTY: Record<string, string> = {
-  "stock-promotions": "No disclosed investor-awareness or IR engagements found in the last 5 months. Run POST /api/admin/backfill-promotions to scan, or wait for the nightly wire sync.",
+  "stock-promotions": "No disclosed investor-awareness or IR engagements found. Run the market sweep (POST /api/admin/scan-promotions-market-v3) or wait for the nightly wire sync.",
   "unlock-calendar": "No tracked financings approaching their 4-month hold expiry. This fills automatically as placement closings cross the wire.",
   "news": "No press releases collected yet today. The wire sync runs nightly at 11 PM ET - or trigger it any time via POST /api/jobs/nightly.",
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
