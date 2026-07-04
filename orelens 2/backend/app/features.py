@@ -715,3 +715,110 @@ def clean_misattributed(db: Session = Depends(get_db)):
             "removed_misattributed_financings": removed_fins,
             "deduped_financings": deduped,
             "promotions_remaining": promos, "financings_remaining": fins}
+
+
+# --------------------------------- market-wide promotion sweep (all of TSXV)
+ISSUER_PAT_SRC = (r"([A-Z][A-Za-z0-9&.\-' ]{2,60}?)\s*"
+                  r"\(\s*(TSXV|TSX-V|TSX VENTURE|TSX)\s*[:\s]\s*([A-Z]{1,6})(?:\.[A-Z])?\s*[\)|,]")
+
+MARKET_PROMO_QUERIES = [
+    '"investor awareness" "TSXV"',
+    '"investor awareness" "TSX Venture"',
+    '"investor awareness campaign" mining',
+    '"investor relations agreement" "TSXV"',
+    '"market awareness" "TSXV"',
+    '"marketing services" "TSXV"',
+    '"engages" "investor awareness"',
+    '"digital marketing" "TSXV" mining',
+]
+
+
+@router.post("/api/admin/scan-promotions-market")
+async def scan_promotions_market(days: int = 150, db: Session = Depends(get_db)):
+    """Market-wide sweep: search the news for promotion language across ALL
+    TSXV/TSX mining issuers (not just tracked ones), follow each hit to the
+    release page, extract the issuer's own name + ticker from its exchange
+    parenthetical, auto-add unknown companies, and file the promotion."""
+    import asyncio as _aio
+    import re as _re
+    import feedparser as _fp
+    from datetime import datetime as _dt, timedelta as _td
+    from urllib.parse import quote_plus as _qp
+    from .jobs.nightly import _upsert_promotion
+    from .services import promotion as _promo
+
+    issuer_pat = _re.compile(ISSUER_PAT_SRC)
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
+    cutoff = _dt.utcnow() - _td(days=days)
+    stats = {"headlines_seen": 0, "pages_fetched": 0, "promotions_filed": 0,
+             "companies_added": [], "hits_by_ticker": {}}
+    seen_links: set[str] = set()
+
+    async with _httpx.AsyncClient(timeout=25, headers=ua,
+                                  follow_redirects=True) as client:
+        for query in MARKET_PROMO_QUERIES:
+            url = (f"https://news.google.com/rss/search?q={_qp(query + f' when:{days}d')}"
+                   "&hl=en-CA&gl=CA&ceid=CA:en")
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                feed = _fp.parse(r.content)
+            except Exception:  # noqa: BLE001
+                continue
+            for e in feed.entries[:100]:
+                link = e.get("link", "")
+                title = e.get("title", "")
+                if not link or link in seen_links:
+                    continue
+                seen_links.add(link)
+                stats["headlines_seen"] += 1
+                pub = (_dt(*e.published_parsed[:6])
+                       if e.get("published_parsed") else None)
+                if not pub or pub < cutoff:
+                    continue
+                # fetch the release page: issuer + full disclosure text live there
+                try:
+                    pr = await client.get(link)
+                    pr.raise_for_status()
+                    text = _promo.html_to_text(pr.text)[:80_000]
+                except Exception:  # noqa: BLE001
+                    continue
+                stats["pages_fetched"] += 1
+                parsed = _promo.parse_promotion(text)
+                if not parsed:
+                    continue
+                m = issuer_pat.search(text[:6000])   # issuer is named up top
+                if not m:
+                    continue
+                name = m.group(1).strip(" ,.")
+                # strip dateline prefixes: 'Vancouver, BC - Miivo AI Corp.' -> 'Miivo AI Corp.'
+                name = _re.split(r"\s[\-\u2013\u2014]{1,2}\s|--|\)\s", name)[-1].strip(" ,.-")
+                ticker = m.group(3).upper()
+                exchange = "TSXV" if "V" in m.group(2).upper().replace("TSX", "") \
+                           or "VENTURE" in m.group(2).upper() else "TSX"
+                if len(name) < 4:
+                    continue
+                c = db.execute(select(models.Company).where(
+                    models.Company.ticker == ticker)).scalar_one_or_none()
+                if not c:
+                    c = models.Company(ticker=ticker, exchange=exchange,
+                                       name=name, commodity="Unclassified",
+                                       jurisdiction="", jurisdiction_tier="Tier 1",
+                                       project_name="", shares_outstanding=0)
+                    db.add(c)
+                    db.flush()
+                    stats["companies_added"].append(f"{ticker} ({name})")
+                # final attribution check against the issuer's own name
+                if not _title_mentions(c, title) and c.name.lower() not in text[:2000].lower():
+                    continue
+                _upsert_promotion(db, c.id, pub, title[:400], link[:400], parsed)
+                stats["promotions_filed"] += 1
+                stats["hits_by_ticker"][ticker] = stats["hits_by_ticker"].get(ticker, 0) + 1
+                await _aio.sleep(0.25)
+            await _aio.sleep(0.3)
+    db.commit()
+    promos = db.execute(select(models.Promotion)).scalars().all()
+    stats["promotions_tracked_total"] = len(promos)
+    return stats
