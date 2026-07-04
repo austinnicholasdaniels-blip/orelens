@@ -175,3 +175,19 @@ class Financing(Base):
     kind: Mapped[str] = mapped_column(String(40), default="private placement")
     headline: Mapped[str] = mapped_column(String(400))
     source_url: Mapped[str] = mapped_column(String(400))
+
+
+class Promotion(Base):
+    """A paid investor-awareness / IR engagement disclosed in a press release.
+    Paid promotion + tight float is a classic junior setup - now visible."""
+    __tablename__ = "promotions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    announced: Mapped[date] = mapped_column(Date)
+    firm: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Float, nullable=True)       # total $
+    monthly_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    term_months: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ends: Mapped[date | None] = mapped_column(Date, nullable=True)
+    headline: Mapped[str] = mapped_column(String(400))
+    source_url: Mapped[str] = mapped_column(String(400))
