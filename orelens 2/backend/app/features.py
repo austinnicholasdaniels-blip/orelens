@@ -822,3 +822,111 @@ async def scan_promotions_market(days: int = 150, db: Session = Depends(get_db))
     promos = db.execute(select(models.Promotion)).scalars().all()
     stats["promotions_tracked_total"] = len(promos)
     return stats
+
+
+# ----------------------- market sweep v2: Bing News (direct links) + mining filter
+MINING_HINTS = ("mining", "mineral", "exploration", "gold", "silver", "copper",
+                "lithium", "uranium", "drill", "metals", "nickel", "zinc",
+                "critical mineral", "mineraliz", "assay", "ore ")
+
+BING_PROMO_QUERIES = [
+    '"engages" "investor awareness"',
+    '"investor awareness services"',
+    '"investor awareness campaign"',
+    '"investor relations agreement"',
+    '"market awareness campaign"',
+    '"marketing services agreement" TSXV',
+    '"engages" "investor relations"',
+]
+
+
+@router.post("/api/admin/scan-promotions-market-v2")
+async def scan_promotions_market_v2(days: int = 150, db: Session = Depends(get_db)):
+    """Market-wide sweep, corrected: Bing News RSS returns DIRECT publisher
+    links (Google's are redirects our server can't follow). Strategy: search
+    the engagement language broadly, then keep only releases whose text reads
+    as mining. Auto-adds unknown issuers."""
+    import asyncio as _aio
+    import re as _re
+    import feedparser as _fp
+    from datetime import datetime as _dt, timedelta as _td
+    from urllib.parse import quote_plus as _qp
+    from .jobs.nightly import _upsert_promotion
+    from .services import promotion as _promo
+
+    issuer_pat = _re.compile(ISSUER_PAT_SRC)
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36")}
+    cutoff = _dt.utcnow() - _td(days=days)
+    stats = {"headlines_seen": 0, "pages_fetched": 0, "non_mining_skipped": 0,
+             "promotions_filed": 0, "companies_added": [], "hits_by_ticker": {}}
+    seen: set[str] = set()
+
+    async with _httpx.AsyncClient(timeout=25, headers=ua,
+                                  follow_redirects=True) as client:
+        for query in BING_PROMO_QUERIES:
+            url = (f"https://www.bing.com/news/search?q={_qp(query)}"
+                   "&format=rss&count=60")
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                feed = _fp.parse(r.content)
+            except Exception:  # noqa: BLE001
+                continue
+            for e in feed.entries:
+                link = e.get("link", "")
+                title = e.get("title", "")
+                if not link or link in seen:
+                    continue
+                seen.add(link)
+                stats["headlines_seen"] += 1
+                pub = (_dt(*e.published_parsed[:6])
+                       if e.get("published_parsed") else None)
+                if not pub or pub < cutoff:
+                    continue
+                try:
+                    pr = await client.get(link)
+                    pr.raise_for_status()
+                    text = _promo.html_to_text(pr.text)[:80_000]
+                except Exception:  # noqa: BLE001
+                    continue
+                stats["pages_fetched"] += 1
+                low = text.lower()
+                if not any(h in low for h in MINING_HINTS):
+                    stats["non_mining_skipped"] += 1
+                    continue
+                parsed = _promo.parse_promotion(text)
+                if not parsed:
+                    continue
+                m = issuer_pat.search(text[:8000])
+                if not m:
+                    continue
+                name = m.group(1).strip(" ,.")
+                name = _re.split(r"\s[\-\u2013\u2014]{1,2}\s|--|\)\s", name)[-1].strip(" ,.-")
+                ticker = m.group(3).upper()
+                exchange = "TSXV" if "V" in m.group(2).upper().replace("TSX", "") \
+                           or "VENTURE" in m.group(2).upper() else "TSX"
+                if len(name) < 4:
+                    continue
+                c = db.execute(select(models.Company).where(
+                    models.Company.ticker == ticker)).scalar_one_or_none()
+                if not c:
+                    c = models.Company(ticker=ticker, exchange=exchange,
+                                       name=name, commodity="Unclassified",
+                                       jurisdiction="", jurisdiction_tier="Tier 1",
+                                       project_name="", shares_outstanding=0)
+                    db.add(c)
+                    db.flush()
+                    stats["companies_added"].append(f"{ticker} ({name})")
+                if not _title_mentions(c, title) and c.name.lower() not in low[:3000]:
+                    continue
+                _upsert_promotion(db, c.id, pub, title[:400], link[:400], parsed)
+                stats["promotions_filed"] += 1
+                stats["hits_by_ticker"][ticker] = stats["hits_by_ticker"].get(ticker, 0) + 1
+                await _aio.sleep(0.2)
+            await _aio.sleep(0.3)
+    db.commit()
+    promos = db.execute(select(models.Promotion)).scalars().all()
+    stats["promotions_tracked_total"] = len(promos)
+    return stats
