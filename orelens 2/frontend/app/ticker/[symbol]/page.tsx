@@ -19,6 +19,10 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
   if (!data) return <p className="text-ash">Loading core samples…</p>;
 
   const { company, prices, grade, capital, warrants, program, drill_results, comparison } = data;
+  const financings = data.financings ?? [];
+  const today = new Date();
+  const upcoming = financings.filter((f: any) => f.closed && f.hold_expiry && new Date(f.hold_expiry) >= today);
+  const daysTo = (d: string) => Math.ceil((new Date(d).getTime() - today.getTime()) / 86400000);
 
   return (
     <div className="space-y-6">
@@ -41,7 +45,8 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
           <WarrantOverhangMap warrants={warrants} />
           <SharesHistoryChart history={data.shares_history} />
         </div>
-        <div className="bg-tray border border-seam rounded-sm p-4 h-fit">
+        <div className="space-y-6 h-fit">
+        <div className="bg-tray border border-seam rounded-sm p-4">
           <p className="text-xs uppercase tracking-widest text-ash mb-3">Capital Structure</p>
           <dl className="grid grid-cols-2 gap-y-3 text-sm">
             <dt className="text-ash">Shares Outstanding</dt><dd className="font-mono text-right">{fmt.shares(capital.shares_outstanding)}</dd>
@@ -50,6 +55,34 @@ export default function TickerPage({ params }: { params: { symbol: string } }) {
             <dt className="text-ash">Monthly Burn</dt><dd className="font-mono text-right">{fmt.money(capital.monthly_burn)}</dd>
             <dt className="text-ash">Theoretical Cash from Warrants</dt><dd className="font-mono text-right text-oxide">{fmt.money(capital.theoretical_warrant_cash)}</dd>
           </dl>
+        </div>
+
+        <div className="bg-tray border border-seam rounded-sm p-4">
+          <p className="text-xs uppercase tracking-widest text-ash mb-3">Financings &amp; Unlocks</p>
+          {upcoming.map((f: any, i: number) => (
+            <div key={`u${i}`} className={`mb-3 px-3 py-2 rounded-sm border text-sm ${daysTo(f.hold_expiry) <= 14 ? "border-hazard text-hazard" : "border-assay text-assay"}`}>
+              &#9888; {f.amount && f.price ? `~${(f.amount / f.price / 1e6).toFixed(1)}M shares` : "Placement paper"} free-trading on <span className="font-mono">{f.hold_expiry}</span> ({daysTo(f.hold_expiry)}d)
+            </div>
+          ))}
+          {financings.length === 0 && (
+            <p className="text-ash text-sm">No financings detected in the last several months of news.</p>
+          )}
+          {financings.map((f: any, i: number) => (
+            <div key={i} className="border-t border-seam py-2 text-sm flex flex-wrap items-baseline gap-x-3">
+              <span className="capitalize">{f.kind}</span>
+              <span className="font-mono">{f.amount ? `$${(f.amount / 1e6).toFixed(1)}M` : "\u2014"}</span>
+              {f.price != null && <span className="text-ash">@ ${f.price}</span>}
+              {f.warrant_strike != null && <span className="text-ash">wt ${f.warrant_strike}</span>}
+              <span className={`text-xs uppercase tracking-widest ${f.closed ? "text-oxide" : "text-ash"}`}>
+                {f.closed ? `Closed ${f.close_date ?? ""}` : `Announced ${f.announced}`}
+              </span>
+              {f.closed && f.hold_expiry && (
+                <span className="text-xs text-ash">free-trading {f.hold_expiry}</span>
+              )}
+              <a href={f.url} target="_blank" rel="noopener noreferrer" className="text-xs text-assay hover:underline ml-auto">source</a>
+            </div>
+          ))}
+        </div>
         </div>
       </div>
 
