@@ -389,11 +389,13 @@ def data_quality(db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------- attribution guard
-_SUFFIX_WORDS = {"corp", "corp.", "corporation", "inc", "inc.", "incorporated",
-                 "ltd", "ltd.", "limited", "plc", "co", "co.", "company"}
+_SUFFIX_WORDS = {"corp", "corp.", "inc", "inc.", "ltd", "ltd.", "limited",
+                 "corporation", "company", "co", "co.", "plc", "incorporated"}
 
 
 def _core_name(name: str) -> str:
+    """Company name minus legal suffixes, lowercased: 'New Found Gold Corp.'
+    -> 'new found gold'."""
     words = [w for w in name.lower().replace(",", " ").split()
              if w not in _SUFFIX_WORDS]
     return " ".join(words)
@@ -401,7 +403,8 @@ def _core_name(name: str) -> str:
 
 def _title_mentions(company, title: str) -> bool:
     """A headline may only be attributed to a company if it actually names
-    the company (core name phrase) or cites its exchange ticker."""
+    the company (core name phrase) or cites its exchange ticker. Google's
+    relevance matching is fuzzy - never trust it for attribution."""
     import re as _re
     t = title.lower()
     core = _core_name(company.name)
@@ -410,6 +413,9 @@ def _title_mentions(company, title: str) -> bool:
     return bool(_re.search(
         rf"\((?:TSX|TSXV|TSX-V|CSE|ASX|NYSE|OTCQ[BX])\s*:\s*{_re.escape(company.ticker)}\b",
         title))
+
+
+_title_belongs_to = _title_mentions   # single source of truth
 
 
 # --------------------------------------------- financing history backfill
@@ -670,3 +676,42 @@ def purge_misattributed(db: Session = Depends(get_db)):
     return {"removed": removed,
             "financings_remaining": len(db.execute(select(models.Financing)).scalars().all()),
             "promotions_remaining": len(db.execute(select(models.Promotion)).scalars().all())}
+
+
+# ---------------------------------------------------- data integrity cleaner
+@router.post("/api/admin/clean-misattributed")
+def clean_misattributed(db: Session = Depends(get_db)):
+    """Delete promotions/financings whose headline does not actually name the
+    company it was attributed to, and dedupe financings (same company, same
+    amount, same kind -> keep the earliest)."""
+    removed_promos = removed_fins = deduped = 0
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+
+    for p in db.execute(select(models.Promotion)).scalars().all():
+        c = companies.get(p.company_id)
+        if not c or not _title_belongs_to(c, p.headline):
+            db.delete(p)
+            removed_promos += 1
+    for fin in db.execute(select(models.Financing)).scalars().all():
+        c = companies.get(fin.company_id)
+        if not c or not _title_belongs_to(c, fin.headline):
+            db.delete(fin)
+            removed_fins += 1
+    db.flush()
+
+    seen: dict[tuple, int] = {}
+    for fin in db.execute(select(models.Financing)
+                          .order_by(models.Financing.announced)).scalars().all():
+        key = (fin.company_id, fin.kind, fin.amount)
+        if key in seen:
+            db.delete(fin)
+            deduped += 1
+        else:
+            seen[key] = fin.id
+    db.commit()
+    promos = len(db.execute(select(models.Promotion)).scalars().all())
+    fins = len(db.execute(select(models.Financing)).scalars().all())
+    return {"removed_misattributed_promotions": removed_promos,
+            "removed_misattributed_financings": removed_fins,
+            "deduped_financings": deduped,
+            "promotions_remaining": promos, "financings_remaining": fins}
