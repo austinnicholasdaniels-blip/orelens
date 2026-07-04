@@ -8,7 +8,6 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type Row = Record<string, any>;
 const TABS = [
   { id: "all-stocks", label: "All Stocks" },
-  { id: "news", label: "News" },
   { id: "value-momentum", label: "Best Bang-for-Buck" },
   { id: "most-dilutive", label: "Most Dilutive" },
   { id: "coiled-springs", label: "Coiled Springs" },
@@ -26,10 +25,6 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "price", label: "Price" }, { key: "change_pct", label: "Day %" },
     { key: "volume", label: "Volume" }, { key: "commodity", label: "Commodity" },
     { key: "grade", label: "Grade" },
-  ],
-  "news": [
-    { key: "published", label: "Published" }, { key: "ticker", label: "Ticker" },
-    { key: "headline", label: "Headline" }, { key: "wire", label: "Wire" },
   ],
   "value-momentum": [
     { key: "ticker", label: "Ticker" }, { key: "score", label: "Score" },
@@ -66,9 +61,18 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
   ],
 };
 
+const DESCRIPTIONS: Record<string, string> = {
+  "all-stocks": "Every company OreLens tracks, with the latest close and day-over-day move, sorted by the day's biggest gainers. Click any column header to re-sort, or any ticker for its full capital-structure profile.",
+  "value-momentum": "Only companies holding an A or B dilution grade qualify. Scores stack cheap ounces (low EV per resource ounce), volatility contraction with drying volume during an active drill program, and open-market insider buying in the last 60 days - funded stories getting quieter while insiders step in.",
+  "most-dilutive": "Ranks companies by the largest quarter-over-quarter percentage increase in shares outstanding, straight from quarterly filings. Shows exactly how many new shares hit the register and the total growth across the tracked window.",
+  "coiled-springs": "Price within 15% of the 90-day high, 10-day average volume at least 1.3x the prior 50-day average, and a clean share structure (max 8% QoQ share growth, never grade D or F). Volume precedes price in illiquid juniors - this catches accumulation before the breakout. Rare by design.",
+  "unlock-calendar": "Every detected private placement or bought deal that has closed, with the Canadian 4-month hold expiry computed automatically. The free-trading date is a supply event - the day placement paper can legally hit the market. Sorted soonest first; red means under two weeks out.",
+  "active-drills": "A company qualifies on any of three signals: drill-start news within 150 days, a program flagged ongoing at any age, or drill results published within 150 days. The Why Active column shows which signal fired and the date of the latest activity.",
+  "high-grade-breakouts": "Benchmark-beating drill intercepts published in the last 10 days where the stock also traded at least 3x its 20-day average volume. High grades plus a volume response - the market confirming the geology. The rarest signal on the site.",
+};
+
 const EMPTY: Record<string, string> = {
   "unlock-calendar": "No tracked financings approaching their 4-month hold expiry. This fills automatically as placement closings cross the wire.",
-  "news": "No press releases collected yet today. The wire sync runs nightly at 11 PM ET - or trigger it any time via POST /api/jobs/nightly.",
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
   "coiled-springs": "No coiled springs right now: nothing is holding near its 90-day high with building volume and a clean share structure. These setups are rare by design - when one appears, pay attention.",
   "active-drills": "No active drill programs detected: no drill-start news or published results in the last 5 months, and no programs flagged ongoing. Fills as the nightly news sync accumulates.",
@@ -188,6 +192,12 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {DESCRIPTIONS[tab] && (
+        <p className="text-ash text-sm mb-4 max-w-4xl border-l-2 border-assay/60 pl-3">
+          {DESCRIPTIONS[tab]}
+        </p>
+      )}
+
       {error && <p className="text-hazard text-sm mb-4">{error}</p>}
 
       <table className="core-tray w-full">
@@ -220,12 +230,6 @@ export default function Dashboard() {
                     <span className={r.days_until <= 14 ? "text-hazard font-semibold" : r.days_until <= 45 ? "text-assay" : ""}>
                       {r.days_until}
                     </span>
-                  ) : c.key === "headline" ? (
-                    <a href={r.url} target="_blank" rel="noopener noreferrer" className="hover:text-assay hover:underline">
-                      {r.headline}{r.drill_start ? " \u26cf" : ""}
-                    </a>
-                  ) : c.key === "published" ? (
-                    <span className="text-xs text-ash font-mono">{(r.published ?? "").slice(0, 16).replace("T", " ")}</span>
                   ) : c.key === "volume" ? (
                     <span className="font-mono">{(r.volume ?? 0).toLocaleString()}</span>
                   ) : c.key === "grade" ? (
