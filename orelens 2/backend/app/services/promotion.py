@@ -81,14 +81,3 @@ def html_to_text(html: str) -> str:
     text = TAG_RE.sub(" ", html)
     text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&#36;", "$")
     return re.sub(r"[ \t]{2,}", " ", text)
-
-
-def html_to_text(html: str) -> str:
-    """Cheap HTML -> text for release pages (no external deps)."""
-    import re as _re
-    html = _re.sub(r"<(script|style)[\s\S]*?</\1>", " ", html, flags=_re.I)
-    html = _re.sub(r"<br\s*/?>|</(p|tr|div|h[1-6]|li)>", "\n", html, flags=_re.I)
-    text = _re.sub(r"<[^>]+>", " ", html)
-    text = _re.sub(r"&nbsp;?", " ", text)
-    text = _re.sub(r"&amp;", "&", text)
-    return _re.sub(r"[ \t]{2,}", " ", text)
