@@ -86,14 +86,6 @@ def _upsert_financing(db: Session, company_id: int, published, headline: str,
             open_fin.price_per_unit = f["price_per_unit"] or open_fin.price_per_unit
             open_fin.warrant_strike = f["warrant_strike"] or open_fin.warrant_strike
             return
-        # syndication/dup guard for closes: same company + same amount = same deal
-        for ex in db.execute(select(Financing).where(
-                Financing.company_id == company_id,
-                Financing.closed.is_(True))).scalars():
-            if f["amount"] and ex.amount and abs(f["amount"] - ex.amount) < 0.01 * ex.amount + 1:
-                return
-            if ex.close_date and abs((ex.close_date - pub_date).days) <= 5:
-                return
         db.add(Financing(company_id=company_id, announced=pub_date, closed=True,
                          close_date=pub_date, hold_expiry=pub_date + _td(days=122),
                          amount=f["amount"], price_per_unit=f["price_per_unit"],
@@ -174,11 +166,21 @@ async def sync_newswires(db: Session) -> dict:
         stored += 1
 
         if company_id:
-            f = _fin.parse_financing(text)
+            # if the headline smells like a financing or a promotion, fetch the
+            # FULL release page - terms live in the body, not the headline
+            deep = text
+            hint = _re.search(
+                r"placement|bought deal|offering|investor|awareness|marketing|"
+                r"engag|relations", text, _re.I)
+            if hint and item["url"]:
+                full = ingest.fetch_release_text(item["url"])
+                if len(full) > len(text):
+                    deep = full
+            f = _fin.parse_financing(deep)
             if f:
                 _upsert_financing(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], f)
-            pmo = _promo.parse_promotion(text)
+            pmo = _promo.parse_promotion(deep)
             if pmo:
                 _upsert_promotion(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], pmo)
@@ -204,6 +206,9 @@ async def sync_newswires(db: Session) -> dict:
 async def sync_filings(db: Session) -> None:
     """For each issuer: pull new MD&A / interim financials, extract cash, burn,
     and the warrant table via the LLM pass, and persist a snapshot."""
+    # SEDAR+ access is issuer-by-issuer (RSS or commercial mirror) — plug the
+    # per-issuer feed URL into Company metadata when you build the universe.
+    # EDGAR path shown in ingest.fetch_edgar_recent for dual-listed names.
     log.info("filings sync: wire your SEDAR+ feed source here")
 
 
@@ -254,6 +259,28 @@ def run_grades(db: Session) -> None:
     db.commit()
 
 
+async def run_sweeps(db: Session) -> dict:
+    """Incremental market sweeps: last ~10 days of financing news per company
+    and promotion disclosures market-wide. Failures never kill the run."""
+    out = {}
+    try:
+        from ..features import backfill_financing_history
+        r = await backfill_financing_history(days=10, db=db)
+        out["financings"] = {k: r[k] for k in
+                             ("headlines_matched", "financings_tracked") if k in r}
+    except Exception as exc:  # noqa: BLE001
+        out["financings"] = {"error": str(exc)[:200]}
+    try:
+        from ..features import scan_promotions_market_v3
+        r = await scan_promotions_market_v3(days=10, db=db)
+        out["promotions"] = {k: r[k] for k in
+                             ("promotions_filed", "companies_added",
+                              "promotions_tracked_total") if k in r}
+    except Exception as exc:  # noqa: BLE001
+        out["promotions"] = {"error": str(exc)[:200]}
+    return out
+
+
 async def run_nightly() -> dict:
     started = datetime.utcnow()
     db = SessionLocal()
@@ -261,11 +288,12 @@ async def run_nightly() -> dict:
         await sync_prices(db)
         await sync_filings(db)
         wire_stats = await sync_newswires(db)
+        sweep_stats = await run_sweeps(db)
         run_grades(db)
     finally:
         db.close()
     return {"started": started.isoformat(), "finished": datetime.utcnow().isoformat(),
-            "newswire": wire_stats}
+            "newswire": wire_stats, "sweeps": sweep_stats}
 
 
 if __name__ == "__main__":
