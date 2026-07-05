@@ -7,8 +7,13 @@ import WarrantOverhangMap from "@/components/WarrantOverhangMap";
 import SharesHistoryChart from "@/components/SharesHistoryChart";
 import CashHistoryChart from "@/components/CashHistoryChart";
 import DrillTimeline from "@/components/DrillTimeline";
+import BetaGate from "@/components/BetaGate";
 
 export default function TickerPage({ params }: { params: { symbol: string } }) {
+  return <BetaGate><TickerInner params={params} /></BetaGate>;
+}
+
+function TickerInner({ params }: { params: { symbol: string } }) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
 
