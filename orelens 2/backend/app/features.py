@@ -388,6 +388,8 @@ def data_quality(db: Session = Depends(get_db)):
     }
 
 
+
+
 # ---------------------------------------------------------- attribution guard
 _SUFFIX_WORDS = {"corp", "corp.", "inc", "inc.", "ltd", "ltd.", "limited",
                  "corporation", "company", "co", "co.", "plc", "incorporated"}
@@ -422,7 +424,8 @@ _title_belongs_to = _title_mentions   # single source of truth
 @router.post("/api/admin/backfill-financing-history")
 async def backfill_financing_history(days: int = 135, db: Session = Depends(get_db)):
     """Scan the last ~4 months of news for every tracked company via Google
-    News RSS and extract placements/bought deals into the Financing table."""
+    News RSS and extract placements/bought deals into the Financing table.
+    Captures financings on every wire, not just Newsfile."""
     import asyncio as _aio
     import feedparser as _fp
     from datetime import datetime as _dt, timedelta as _td
@@ -480,7 +483,8 @@ async def backfill_financing_history(days: int = 135, db: Session = Depends(get_
 @router.get("/api/scanners/stock-promotions")
 def stock_promotions(commodity: str | None = None, tier: str | None = None,
                      db: Session = Depends(get_db)):
-    """Disclosed investor-awareness / IR engagements from the last ~5 months."""
+    """Disclosed investor-awareness / IR engagements from the last ~5 months.
+    Paid promotion + tight float is the classic junior setup - watch for it."""
     from datetime import timedelta as _td
     today = date.today()
     out = []
@@ -507,6 +511,7 @@ def stock_promotions(commodity: str | None = None, tier: str | None = None,
             "ends": p.ends and p.ends.isoformat(),
             "status": status, "headline": p.headline, "url": p.source_url,
         })
+    out.sort(key=lambda x: (not x["status"].startswith("ACTIVE"), x["announced"]), )
     out.sort(key=lambda x: not x["status"].startswith("ACTIVE"))
     return out
 
@@ -793,7 +798,7 @@ async def scan_promotions_market(days: int = 150, db: Session = Depends(get_db))
                 if not m:
                     continue
                 name = m.group(1).strip(" ,.")
-                # strip dateline prefixes: 'Vancouver, BC - Miivo AI Corp.' -> 'Miivo AI Corp.'
+                # strip dateline prefixes: "Vancouver, BC - Miivo AI Corp." -> "Miivo AI Corp."
                 name = _re.split(r"\s[\-\u2013\u2014]{1,2}\s|--|\)\s", name)[-1].strip(" ,.-")
                 ticker = m.group(3).upper()
                 exchange = "TSXV" if "V" in m.group(2).upper().replace("TSX", "") \
@@ -843,9 +848,9 @@ BING_PROMO_QUERIES = [
 @router.post("/api/admin/scan-promotions-market-v2")
 async def scan_promotions_market_v2(days: int = 150, db: Session = Depends(get_db)):
     """Market-wide sweep, corrected: Bing News RSS returns DIRECT publisher
-    links (Google's are redirects our server can't follow). Strategy: search
-    the engagement language broadly, then keep only releases whose text reads
-    as mining. Auto-adds unknown issuers."""
+    links (Google's are redirects our server can't follow). Strategy per the
+    operator: search the engagement language broadly, then keep only releases
+    whose text reads as mining. Auto-adds unknown issuers."""
     import asyncio as _aio
     import re as _re
     import feedparser as _fp
@@ -982,7 +987,8 @@ async def scan_promotions_market_v3(days: int = 365, db: Session = Depends(get_d
     """Deep market sweep: Google News archive (up to a year) with redirect
     decoding, broad 'engages investor relations' phrasing, AND direct searches
     for every known promotion firm - each firm query surfaces its whole mining
-    client roster."""
+    client roster. Only ticker, amount, and active-status are surfaced to the
+    UI; everything stored keeps its source link for verification."""
     import asyncio as _aio
     import re as _re
     import feedparser as _fp
@@ -1002,6 +1008,7 @@ async def scan_promotions_market_v3(days: int = 365, db: Session = Depends(get_d
     seen: set[str] = set()
 
     async def _resolve_and_fetch(client, glink: str) -> str:
+        """Return release text or '' - tries decoded URL, then interstitial."""
         real = _gnews_real_url(glink)
         if real:
             stats["links_decoded"] += 1
@@ -1046,6 +1053,7 @@ async def scan_promotions_market_v3(days: int = 365, db: Session = Depends(get_d
                        if e.get("published_parsed") else None)
                 if not pub or pub < cutoff:
                     continue
+                # cheap pre-filter on the headline before doing network work
                 tl = title.lower()
                 if not any(k in tl for k in ("engag", "investor", "awareness",
                                              "marketing", "market making",
@@ -1132,3 +1140,77 @@ def dedupe_promotions(db: Session = Depends(get_db)):
     db.commit()
     remaining = len(db.execute(select(models.Promotion)).scalars().all())
     return {"duplicates_removed": removed, "promotions_remaining": remaining}
+
+
+# ------------------------------------------------ company table dedupe + lock
+@router.post("/api/admin/dedupe-companies")
+def dedupe_companies(db: Session = Depends(get_db)):
+    """Merge duplicate Company rows (same ticker): keep the oldest/most complete
+    row, repoint every child record onto it, delete the rest, then create a
+    UNIQUE index on ticker so duplicates are impossible from now on."""
+    from collections import defaultdict
+    from sqlalchemy import text as _text
+
+    child_models = [models.DailyPrice, models.FinancialSnapshot,
+                    models.WarrantTranche, models.PressRelease,
+                    models.DrillResult, models.DrillProgram,
+                    models.DilutionGrade, models.SharesHistory,
+                    models.Financing, models.Promotion]
+
+    by_ticker = defaultdict(list)
+    for c in db.execute(select(models.Company)).scalars():
+        by_ticker[c.ticker].append(c)
+
+    merged = 0
+    for ticker, rows in by_ticker.items():
+        if len(rows) < 2:
+            continue
+        # keeper: most price history, then lowest id (oldest)
+        def _weight(c):
+            n = len(db.execute(select(models.DailyPrice.id).where(
+                models.DailyPrice.company_id == c.id)).scalars().all())
+            return (-n, c.id)
+        rows.sort(key=_weight)
+        keeper, dupes = rows[0], rows[1:]
+        for d in dupes:
+            if not keeper.name or keeper.name == keeper.ticker:
+                keeper.name = d.name or keeper.name
+            if keeper.commodity in (None, "", "Unclassified"):
+                keeper.commodity = d.commodity or keeper.commodity
+            for M in child_models:
+                for child in db.execute(select(M).where(
+                        M.company_id == d.id)).scalars():
+                    child.company_id = keeper.id
+            db.delete(d)
+            merged += 1
+        db.flush()
+    db.commit()
+
+    index_created = False
+    try:
+        db.execute(_text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_ticker "
+            "ON companies (ticker)"))
+        db.commit()
+        index_created = True
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+    remaining = len(db.execute(select(models.Company)).scalars().all())
+    return {"duplicate_companies_merged": merged,
+            "companies_remaining": remaining,
+            "unique_index_created": index_created,
+            "next": "run /api/admin/dedupe-promotions and "
+                    "/api/admin/clean-misattributed to finish"}
+
+
+# ------------------------------------------------- one-click full cleanup
+@router.post("/api/admin/clean-all")
+def clean_all(db: Session = Depends(get_db)):
+    """Run every data-hygiene pass in order: company merge, misattribution
+    purge + financing dedupe, promotion syndication dedupe."""
+    report = {}
+    report["companies"] = dedupe_companies(db)
+    report["misattribution_and_financings"] = clean_misattributed(db)
+    report["promotions"] = dedupe_promotions(db)
+    return report
