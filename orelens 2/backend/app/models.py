@@ -148,6 +148,7 @@ class DilutionGrade(Base):
     __table_args__ = (Index("ix_grade_company_day", "company_id", "day", unique=True),)
 
 
+
 class SharesHistory(Base):
     """Quarterly shares-outstanding snapshots (from quarterly balance sheets).
     The quarter-over-quarter delta is the dilution actually hitting the market."""
@@ -191,3 +192,16 @@ class Promotion(Base):
     ends: Mapped[date | None] = mapped_column(Date, nullable=True)
     headline: Mapped[str] = mapped_column(String(400))
     source_url: Mapped[str] = mapped_column(String(400))
+
+
+class BetaSignup(Base):
+    """Beta first-access lead: captured before screener access is granted."""
+    __tablename__ = "beta_signups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    country_code: Mapped[str] = mapped_column(String(8))
+    phone: Mapped[str] = mapped_column(String(30))
+    account_size: Mapped[str] = mapped_column(String(30))
+    token: Mapped[str] = mapped_column(String(64), index=True)
+    created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
