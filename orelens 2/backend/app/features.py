@@ -1283,3 +1283,56 @@ def promotion_scoreboard(db: Session = Depends(get_db)):
                  "accrue for newly discovered issuers."),
     }
     return {"summary": summary, "campaigns": rows}
+
+
+# ------------------------------------------------------- beta access gate
+class BetaSignupBody(BaseModel):
+    name: str
+    email: str
+    country_code: str
+    phone: str
+    account_size: str
+
+
+@router.post("/api/beta/signup")
+def beta_signup(body: BetaSignupBody, db: Session = Depends(get_db)):
+    """Register a beta first-access lead and return the access token the
+    client stores as a 45-day cookie. Re-submitting the same email returns
+    the same token (people clear cookies)."""
+    import re as _re
+    import secrets as _secrets
+    email = body.email.strip().lower()
+    if not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return {"error": "Please enter a valid email address."}
+    if not body.name.strip() or not body.phone.strip():
+        return {"error": "Name and phone number are required."}
+    existing = db.execute(select(models.BetaSignup).where(
+        models.BetaSignup.email == email)).scalar_one_or_none()
+    if existing:
+        existing.name = body.name.strip()[:120]
+        existing.country_code = body.country_code.strip()[:8]
+        existing.phone = body.phone.strip()[:30]
+        existing.account_size = body.account_size.strip()[:30]
+        db.commit()
+        return {"token": existing.token}
+    token = _secrets.token_hex(24)
+    db.add(models.BetaSignup(
+        name=body.name.strip()[:120], email=email,
+        country_code=body.country_code.strip()[:8],
+        phone=body.phone.strip()[:30],
+        account_size=body.account_size.strip()[:30], token=token))
+    db.commit()
+    return {"token": token}
+
+
+@router.get("/api/admin/beta-signups")
+def beta_signups(db: Session = Depends(get_db)):
+    """The beta lead list: name, email, phone with country code, account
+    size, signup date. This is the asset the gate exists to build."""
+    rows = db.execute(select(models.BetaSignup)
+                      .order_by(_desc(models.BetaSignup.created))).scalars().all()
+    return {"count": len(rows), "signups": [
+        {"name": r.name, "email": r.email,
+         "phone": f"{r.country_code} {r.phone}",
+         "account_size": r.account_size,
+         "signed_up": r.created.isoformat()} for r in rows]}
