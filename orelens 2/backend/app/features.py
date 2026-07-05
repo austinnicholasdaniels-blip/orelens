@@ -1214,3 +1214,72 @@ def clean_all(db: Session = Depends(get_db)):
     report["misattribution_and_financings"] = clean_misattributed(db)
     report["promotions"] = dedupe_promotions(db)
     return report
+
+
+# --------------------------------------------- promotion scoreboard research
+@router.get("/api/research/promotion-scoreboard")
+def promotion_scoreboard(db: Session = Depends(get_db)):
+    """What actually happens to promoted stocks: for every disclosed
+    engagement, the stock's return from the announcement through the campaign
+    and in the 30 days after it ends. Computed from OreLens's own registry
+    and price history - the dataset nobody else has."""
+    from statistics import median
+    today = date.today()
+
+    def _px_near(cid: int, day, direction: int = 1):
+        """Closest close on/after (1) or on/before (-1) a date."""
+        qy = select(models.DailyPrice).where(models.DailyPrice.company_id == cid)
+        if direction == 1:
+            qy = qy.where(models.DailyPrice.day >= day).order_by(models.DailyPrice.day)
+        else:
+            qy = qy.where(models.DailyPrice.day <= day).order_by(_desc(models.DailyPrice.day))
+        row = db.execute(qy.limit(1)).scalar_one_or_none()
+        return row.close if row else None
+
+    rows, during_rets, after_rets = [], [], []
+    for p in db.execute(select(models.Promotion)
+                        .order_by(_desc(models.Promotion.announced))).scalars():
+        c = db.get(models.Company, p.company_id)
+        if not c:
+            continue
+        start_px = _px_near(c.id, p.announced, 1)
+        if not start_px:
+            continue
+        end_day = min(p.ends, today) if p.ends else today
+        end_px = _px_near(c.id, end_day, -1)
+        during = (round(100 * (end_px - start_px) / start_px, 1)
+                  if end_px and start_px else None)
+        after = None
+        if p.ends and p.ends < today:
+            from datetime import timedelta as _td
+            a_px = _px_near(c.id, p.ends + _td(days=30), -1)
+            if a_px and end_px:
+                after = round(100 * (a_px - end_px) / end_px, 1)
+        if during is not None:
+            during_rets.append(during)
+        if after is not None:
+            after_rets.append(after)
+        rows.append({
+            "ticker": c.ticker, "name": c.name,
+            "announced": p.announced.isoformat(),
+            "ends": p.ends and p.ends.isoformat(),
+            "amount": p.amount,
+            "return_during_pct": during,
+            "return_30d_after_pct": after,
+            "status": "ACTIVE" if (p.ends and p.ends >= today) or
+                      (not p.ends and (today - p.announced).days <= 90) else "Ended",
+        })
+
+    summary = {
+        "campaigns_analyzed": len(rows),
+        "with_price_data": len(during_rets),
+        "median_return_during_pct": round(median(during_rets), 1) if during_rets else None,
+        "avg_return_during_pct": (round(sum(during_rets) / len(during_rets), 1)
+                                  if during_rets else None),
+        "median_return_30d_after_pct": (round(median(after_rets), 1)
+                                        if after_rets else None),
+        "campaigns_ended_with_after_data": len(after_rets),
+        "note": ("After-campaign returns populate as campaigns end and prices "
+                 "accrue for newly discovered issuers."),
+    }
+    return {"summary": summary, "campaigns": rows}
