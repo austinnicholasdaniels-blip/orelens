@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getScanner } from "@/lib/api";
 import GradeChip from "@/components/GradeChip";
+import BetaGate from "@/components/BetaGate";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -86,6 +87,10 @@ const EMPTY: Record<string, string> = {
 };
 
 export default function Dashboard() {
+  return <BetaGate><DashboardInner /></BetaGate>;
+}
+
+function DashboardInner() {
   const [tab, setTab] = useState<string>("all-stocks");
   const [commodity, setCommodity] = useState("");
   const [tier, setTier] = useState("");
