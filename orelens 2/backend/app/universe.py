@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from . import models
-from .services import yahoo
+from .services import marketdata as yahoo
 
 log = logging.getLogger("orelens.universe")
 router = APIRouter()
