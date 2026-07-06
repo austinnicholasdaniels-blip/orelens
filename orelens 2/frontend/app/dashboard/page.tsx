@@ -19,7 +19,6 @@ const TABS = [
   { id: "unlock-calendar", label: "Unlock Calendar" },
   { id: "stock-promotions", label: "Stock Promotions" },
   { id: "active-drills", label: "Active Drill Programs" },
-  { id: "high-grade-breakouts", label: "High-Grade Breakouts" },
 ] as const;
 
 const COMMODITIES = ["Gold", "Silver", "Copper", "Nickel", "Lithium"];
@@ -89,11 +88,6 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "rigs_active", label: "Rigs" }, { key: "runway_m", label: "Runway (mo)" },
     { key: "grade", label: "Grade" },
   ],
-  "high-grade-breakouts": [
-    { key: "ticker", label: "Ticker" }, { key: "intercept", label: "Intercept" },
-    { key: "grade_meters", label: "Gram-meters" }, { key: "volume_ratio", label: "Vol x20d" },
-    { key: "hit_pct", label: "Hit %" }, { key: "grade", label: "Grade" },
-  ],
 };
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -103,7 +97,6 @@ const DESCRIPTIONS: Record<string, string> = {
   "coiled-springs": "Price within 15% of the 90-day high, 10-day average volume at least 1.3x the prior 50-day average, and a clean share structure (max 8% QoQ share growth, never grade D or F). Volume precedes price in illiquid juniors - this catches accumulation before the breakout. Rare by design.",
   "unlock-calendar": "Every detected private placement or bought deal that has closed, with the Canadian 4-month hold expiry computed automatically. The free-trading date is a supply event - the day placement paper can legally hit the market. Sorted soonest first; red means under two weeks out.",
   "active-drills": "A company qualifies on any of three signals: drill-start news within 150 days, a program flagged ongoing at any age, or drill results published within 150 days. The Why Active column shows which signal fired and the date of the latest activity.",
-  "high-grade-breakouts": "Benchmark-beating drill intercepts published in the last 10 days where the stock also traded at least 3x its 20-day average volume. High grades plus a volume response - the market confirming the geology. The rarest signal on the site.",
 };
 
 const EMPTY: Record<string, string> = {
@@ -116,7 +109,6 @@ const EMPTY: Record<string, string> = {
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
   "coiled-springs": "No coiled springs right now: nothing is holding near its 90-day high with building volume and a clean share structure. These setups are rare by design - when one appears, pay attention.",
   "active-drills": "No active drill programs detected: no drill-start news or published results in the last 5 months, and no programs flagged ongoing. Fills as the nightly news sync accumulates.",
-  "high-grade-breakouts": "No benchmark-beating intercepts with volume breakouts recently. These are rare by design.",
 };
 
 export default function Dashboard() {
