@@ -1391,3 +1391,38 @@ def eodhd_debug(ticker: str = "VZLA", exchange: str = "TSXV"):
         except Exception as exc:  # noqa: BLE001
             out[name] = {"exception": str(exc)[:200]}
     return out
+
+
+# ------------------------------------------- EODHD raw-response debug probe
+@router.post("/api/admin/eodhd-debug")
+def eodhd_debug(ticker: str = "VZLA"):
+    """Capture EODHD's raw replies for the failing endpoints, several variants
+    at once, so we can see exactly what the API says from this server."""
+    import httpx as _hx
+    from datetime import date as _d, timedelta as _t
+    from .config import settings as _s
+    if not _s.eodhd_api_key:
+        return {"key_present": False}
+    frm = (_d.today() - _t(days=185)).isoformat()
+    probes = {
+        "eod_V_with_period": (f"https://eodhd.com/api/eod/{ticker}.V",
+                              {"period": "d", "from": frm}),
+        "eod_V_no_period": (f"https://eodhd.com/api/eod/{ticker}.V",
+                            {"from": frm}),
+        "eod_TO_variant": (f"https://eodhd.com/api/eod/{ticker}.TO",
+                           {"from": frm}),
+        "news_V": ("https://eodhd.com/api/news",
+                   {"s": f"{ticker}.V", "limit": 3}),
+        "news_US": ("https://eodhd.com/api/news",
+                    {"s": f"{ticker}.US", "limit": 3}),
+    }
+    out = {}
+    for name, (url, params) in probes.items():
+        try:
+            r = _hx.get(url, params={**params, "api_token": _s.eodhd_api_key,
+                                     "fmt": "json"}, timeout=25)
+            body = r.text[:400]
+            out[name] = {"status": r.status_code, "body_start": body}
+        except Exception as exc:  # noqa: BLE001
+            out[name] = {"error": str(exc)[:200]}
+    return out
