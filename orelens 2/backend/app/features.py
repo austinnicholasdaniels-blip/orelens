@@ -2191,3 +2191,128 @@ def scan_financings_market(days: int = 150):
 @router.get("/api/admin/scan-financings-market-status")
 def scan_financings_market_status():
     return _FINSWEEP_STATUS
+
+
+# ---------------------------------- promotion hunt (EODHD licensed archive)
+_PROMOHUNT_STATUS: dict = {"state": "idle"}
+
+
+def _run_promo_hunt(days: int) -> None:
+    """Fetch up to `days` of licensed news per tracked company and parse the
+    FULL article text for promotion disclosures - headlines rarely carry the
+    fees, article bodies do."""
+    from .db import SessionLocal
+    from .services import eodhd as _e
+    from .services import promotion as _promo
+    from .jobs.nightly import _upsert_promotion
+    db = SessionLocal()
+    stats = {"state": "running", "companies_done": 0, "companies_total": 0,
+             "articles_scanned": 0, "promotions_found": 0, "hits": {}}
+    _PROMOHUNT_STATUS.clear(); _PROMOHUNT_STATUS.update(stats)
+    try:
+        companies = db.execute(select(models.Company)).scalars().all()
+        stats["companies_total"] = len(companies)
+        for c in companies:
+            try:
+                items = _e.fetch_news(c.ticker, c.exchange, days, 50)
+            except Exception:  # noqa: BLE001
+                items = []
+            core = _core_name(c.name)
+            for item in items:
+                text = f"{item['headline']} {item['summary']}"
+                low = text.lower()
+                stats["articles_scanned"] += 1
+                if core not in low:
+                    continue   # a promotion record must name its issuer
+                parsed = _promo.parse_promotion(text)
+                if not parsed:
+                    continue
+                _upsert_promotion(db, c.id, item["published"],
+                                  item["headline"][:400], item["url"][:400], parsed)
+                stats["promotions_found"] += 1
+                stats["hits"][c.ticker] = stats["hits"].get(c.ticker, 0) + 1
+            db.commit()
+            stats["companies_done"] += 1
+            _PROMOHUNT_STATUS.update(stats)
+        stats["promotions_total"] = len(
+            db.execute(select(models.Promotion)).scalars().all())
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _PROMOHUNT_STATUS.update(stats)
+
+
+@router.post("/api/admin/hunt-promotions-eodhd")
+def hunt_promotions_eodhd(days: int = 180):
+    """Deep licensed-archive promotion hunt. Background; poll
+    hunt-promotions-eodhd-status."""
+    import threading
+    from .config import settings as _s
+    if not _s.eodhd_api_key:
+        return {"error": "EODHD_API_KEY not configured"}
+    if _PROMOHUNT_STATUS.get("state") == "running":
+        return {"started": False, "progress": _PROMOHUNT_STATUS}
+    threading.Thread(target=_run_promo_hunt, args=(days,), daemon=True).start()
+    return {"started": True, "days": days,
+            "check_progress": "GET /api/admin/hunt-promotions-eodhd-status"}
+
+
+@router.get("/api/admin/hunt-promotions-eodhd-status")
+def hunt_promotions_eodhd_status():
+    return _PROMOHUNT_STATUS
+
+
+# --------------------------------- drill activity from stored licensed news
+@router.post("/api/admin/detect-drilling-from-news")
+def detect_drilling_from_news(days: int = 120, db: Session = Depends(get_db)):
+    """Mine the stored news bodies (EODHD + wires) for drill starts and
+    assay intercepts: marks programs active with real last-activity dates and
+    files parsed intercepts. Fattens the Active Drill Programs board."""
+    from datetime import datetime as _dt, timedelta as _td
+    from .services import drill_parser as _dp
+    cutoff = _dt.utcnow() - _td(days=days)
+    stats = {"releases_scanned": 0, "drill_starts": 0, "intercepts_added": 0,
+             "programs_activated": []}
+    rows = db.execute(select(models.PressRelease).where(
+        models.PressRelease.company_id.is_not(None),
+        models.PressRelease.published >= cutoff)).scalars().all()
+    have_holes = {(r.company_id, r.hole_id) for r in
+                  db.execute(select(models.DrillResult)).scalars()}
+    for pr in rows:
+        stats["releases_scanned"] += 1
+        text = f"{pr.headline} {pr.body or ''}"
+        program = db.execute(select(models.DrillProgram).where(
+            models.DrillProgram.company_id == pr.company_id,
+            models.DrillProgram.active.is_(True))).scalars().first()
+        started = _dp.is_drill_start(text)
+        intercepts = _dp.parse_intercepts(text)
+        if (started or intercepts) and not program:
+            c = db.get(models.Company, pr.company_id)
+            program = models.DrillProgram(
+                company_id=pr.company_id,
+                name=(pr.headline[:110] or "Current program"),
+                announced=pr.published.date(), rigs_active=1, active=True)
+            db.add(program); db.flush()
+            stats["programs_activated"].append(c.ticker if c else pr.company_id)
+        if started:
+            stats["drill_starts"] += 1
+            pr.is_drill_start = True
+        for i in intercepts:
+            key = (pr.company_id, i.hole_id)
+            if key in have_holes:
+                continue
+            have_holes.add(key)
+            db.add(models.DrillResult(
+                company_id=pr.company_id,
+                program_id=program.id if program else None,
+                published=pr.published, hole_id=i.hole_id,
+                commodity=i.commodity, grade=i.grade, unit=i.unit,
+                width_m=i.width_m, grade_meters=i.grade_meters,
+                above_benchmark=i.above_benchmark,
+                source_url=pr.url, raw_sentence=i.raw_sentence[:2000]))
+            stats["intercepts_added"] += 1
+    db.commit()
+    return stats
