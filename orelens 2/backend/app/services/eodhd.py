@@ -1,7 +1,13 @@
 """
-EODHD engine: licensed prices, SEDAR-sourced fundamentals, and per-ticker
-news for TSX / TSXV / CSE / ASX juniors. Same contract as services.yahoo so
-everything upstream (grades, charts, scanners) is engine-agnostic.
+EODHD market-data engine (All-In-One plan).
+
+Drop-in replacement for the Yahoo engine: fetch_company_data() returns the
+exact same dict shape, so every scanner, chart, and grade upstream is
+untouched. Fundamentals are SEDAR-sourced for Canadian issuers - quarterly
+balance sheets and cash-flow statements go back years, not quarters.
+
+Exchange suffixes (EODHD codes - note ASX is .AU, not Yahoo's .AX):
+    TSX -> .TO   TSXV -> .V   CSE -> .CN   NEO -> .NE   ASX -> .AU
 """
 from __future__ import annotations
 import logging
@@ -13,128 +19,149 @@ from ..config import settings
 
 log = logging.getLogger("orelens.eodhd")
 BASE = "https://eodhd.com/api"
-
-# EODHD exchange suffixes (note ASX is .AU here, unlike Yahoo's .AX)
-SUFFIX = {"TSX": ".TO", "TSXV": ".V", "CSE": ".CN", "ASX": ".AU",
-          "NYSE": ".US", "NASDAQ": ".US", "OTC": ".US"}
-
-
-def _sym(ticker: str, exchange: str) -> str:
-    return f"{ticker}{SUFFIX.get(exchange.upper(), '.V')}"
+SUFFIX = {"TSX": ".TO", "TSXV": ".V", "CSE": ".CN", "NEO": ".NE",
+          "ASX": ".AU", "NYSE": ".US", "NASDAQ": ".US", "OTC": ".US"}
+PERIOD_DAYS = {"5d": 7, "1mo": 35, "3mo": 95, "6mo": 185, "1y": 370,
+               "2y": 740, "5y": 1850, "10y": 3700, "max": 10950}
 
 
-def _get(path: str, **params) -> object | None:
-    params.setdefault("api_token", settings.eodhd_api_key)
-    params.setdefault("fmt", "json")
+def _symbol(ticker: str, exchange: str) -> str:
+    return f"{ticker.upper()}{SUFFIX.get(exchange.upper(), '.V')}"
+
+
+def _get(path: str, params: dict) -> object | None:
+    params = {**params, "api_token": settings.eodhd_api_key, "fmt": "json"}
     try:
-        r = httpx.get(f"{BASE}/{path}", params=params, timeout=30)
+        r = httpx.get(f"{BASE}/{path}", params=params, timeout=30,
+                      follow_redirects=True)
         r.raise_for_status()
         return r.json()
     except Exception as exc:  # noqa: BLE001
-        log.warning("eodhd %s failed: %s", path, exc)
+        log.warning("EODHD %s failed: %s", path, exc)
         return None
 
 
 def _num(v) -> float | None:
     try:
-        return float(v) if v not in (None, "", "None") else None
+        if v in (None, "", "None", "NA"):
+            return None
+        return float(v)
     except (TypeError, ValueError):
         return None
 
 
+def _qdate(s: str):
+    try:
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
 def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
-    """Prices + shares + quarterly cash / burn / share history.
-    Contract-identical to yahoo.fetch_company_data."""
+    """Same contract as yahoo.fetch_company_data. Returns:
+    prices, shares_outstanding, cash, cash_history, monthly_burn,
+    shares_history (+ extras: sector, industry, description,
+    financing_cf_history for future screeners)."""
     out = {"prices": [], "shares_outstanding": None, "cash": None,
-           "monthly_burn": None, "cash_history": [], "shares_history": [],
+           "cash_history": [], "monthly_burn": None, "shares_history": [],
            "sector": None, "industry": None, "description": None,
            "financing_cf_history": []}
-    sym = _sym(ticker, exchange)
+    if not settings.eodhd_api_key:
+        return out
+    sym = _symbol(ticker, exchange)
 
-    days = {"5d": 7, "1mo": 35, "3mo": 95, "6mo": 190, "1y": 370,
-            "2y": 740, "5y": 1830}.get(period, 190)
-    frm = (date.today() - timedelta(days=days)).isoformat()
-    eod = _get(f"eod/{sym}", **{"from": frm, "period": "d"})
-    if isinstance(eod, list):
-        for row in eod:
-            try:
-                out["prices"].append({
-                    "date": datetime.strptime(row["date"], "%Y-%m-%d").date(),
-                    "close": float(row["close"]),
-                    "volume": int(row.get("volume") or 0)})
-            except (KeyError, TypeError, ValueError):
-                continue
+    # ---- prices --------------------------------------------------------
+    frm = (date.today() - timedelta(days=PERIOD_DAYS.get(period, 185))).isoformat()
+    rows = _get(f"eod/{sym}", {"period": "d", "from": frm})
+    if isinstance(rows, list):
+        for r in rows:
+            d = _qdate(r.get("date"))
+            close = _num(r.get("adjusted_close")) or _num(r.get("close"))
+            if d and close:
+                out["prices"].append({"date": d, "close": close,
+                                      "volume": _num(r.get("volume")) or 0})
 
-    fund = _get(f"fundamentals/{sym}")
-    if isinstance(fund, dict):
-        gen = fund.get("General") or {}
-        out["sector"] = gen.get("Sector")
-        out["industry"] = gen.get("Industry")
-        out["description"] = (gen.get("Description") or "")[:1000] or None
+    # ---- fundamentals (SEDAR-sourced for .TO/.V/.CN) ---------------------
+    fund = _get(f"fundamentals/{sym}", {})
+    if not isinstance(fund, dict):
+        return out
 
-        ss = (fund.get("SharesStats") or {}).get("SharesOutstanding")
-        out["shares_outstanding"] = _num(ss)
+    gen = fund.get("General") or {}
+    out["sector"] = gen.get("Sector")
+    out["industry"] = gen.get("Industry")
+    desc = gen.get("Description")
+    out["description"] = desc[:2000] if isinstance(desc, str) else None
 
-        fin = fund.get("Financials") or {}
-        bs_q = (fin.get("Balance_Sheet") or {}).get("quarterly") or {}
-        for day_key in sorted(bs_q.keys()):
-            row = bs_q[day_key] or {}
-            try:
-                as_of = datetime.strptime(day_key, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            cash = _num(row.get("cashAndEquivalents")) or _num(row.get("cash"))
-            if cash is not None:
-                out["cash_history"].append({"as_of": as_of, "cash": cash})
-            sh = _num(row.get("commonStockSharesOutstanding"))
-            if sh:
-                out["shares_history"].append({"as_of": as_of, "shares": sh})
-        if out["cash_history"]:
-            out["cash"] = out["cash_history"][-1]["cash"]
-        if not out["shares_outstanding"] and out["shares_history"]:
-            out["shares_outstanding"] = out["shares_history"][-1]["shares"]
+    stats = fund.get("SharesStats") or {}
+    out["shares_outstanding"] = _num(stats.get("SharesOutstanding"))
 
-        cf_q = (fin.get("Cash_Flow") or {}).get("quarterly") or {}
-        ocf_burns = []
-        for day_key in sorted(cf_q.keys()):
-            row = cf_q[day_key] or {}
-            try:
-                as_of = datetime.strptime(day_key, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            ocf = _num(row.get("totalCashFromOperatingActivities"))
-            if ocf is not None and ocf < 0:
-                ocf_burns.append(-ocf / 3.0)   # quarterly outflow -> monthly
-            fcf = _num(row.get("totalCashFromFinancingActivities"))
-            if fcf is not None:
-                out["financing_cf_history"].append(
-                    {"as_of": as_of, "raised": fcf})
-        if ocf_burns:
-            recent = ocf_burns[-4:]
-            out["monthly_burn"] = round(sum(recent) / len(recent), 0)
+    fin = fund.get("Financials") or {}
+    bs_q = ((fin.get("Balance_Sheet") or {}).get("quarterly")) or {}
+    cf_q = ((fin.get("Cash_Flow") or {}).get("quarterly")) or {}
+
+    # quarterly cash + per-quarter share counts (multi-year on EODHD)
+    for key in sorted(bs_q.keys()):
+        q = bs_q[key] or {}
+        d = _qdate(q.get("date") or key)
+        if not d:
+            continue
+        cash = (_num(q.get("cashAndEquivalents")) or _num(q.get("cash"))
+                or _num(q.get("cashAndShortTermInvestments")))
+        if cash is not None:
+            out["cash_history"].append({"as_of": d, "cash": cash})
+        sh = _num(q.get("commonStockSharesOutstanding"))
+        if sh:
+            out["shares_history"].append({"as_of": d, "shares": sh})
+    if out["cash_history"]:
+        out["cash"] = out["cash_history"][-1]["cash"]
+    if not out["shares_outstanding"] and out["shares_history"]:
+        out["shares_outstanding"] = out["shares_history"][-1]["shares"]
+
+    # true burn from operating cash flow; financing CF for Serial Raisers
+    ocf_recent = []
+    for key in sorted(cf_q.keys()):
+        q = cf_q[key] or {}
+        d = _qdate(q.get("date") or key)
+        if not d:
+            continue
+        ocf = _num(q.get("totalCashFromOperatingActivities"))
+        fcf = _num(q.get("totalCashFromFinancingActivities"))
+        if ocf is not None:
+            ocf_recent.append(ocf)
+        if fcf is not None:
+            out["financing_cf_history"].append({"as_of": d, "raised": fcf})
+    burns = [-o for o in ocf_recent[-4:] if o and o < 0]
+    if burns:
+        out["monthly_burn"] = round(sum(burns) / len(burns) / 3.0, 0)
 
     return out
 
 
-def fetch_news(ticker: str, exchange: str, days: int = 4, limit: int = 20) -> list[dict]:
-    """Per-ticker news with real timestamps. Items match the wire-item shape
-    the nightly consumes: headline / url / published / summary / wire."""
-    sym = _sym(ticker, exchange)
+def fetch_news(ticker: str, exchange: str, days: int = 5, limit: int = 25) -> list[dict]:
+    """Per-ticker financial news with real timestamps. Items match the
+    wire-item shape the nightly consumes: headline/url/published/summary/wire."""
+    if not settings.eodhd_api_key:
+        return []
+    sym = _symbol(ticker, exchange)
     frm = (date.today() - timedelta(days=days)).isoformat()
-    data = _get("news", s=sym, limit=limit, **{"from": frm})
+    rows = _get("news", {"s": sym, "from": frm, "limit": limit})
     items = []
-    if isinstance(data, list):
-        for a in data:
-            try:
-                pub = datetime.fromisoformat(
-                    str(a.get("date", "")).replace("Z", "+00:00")).replace(tzinfo=None)
-            except ValueError:
-                continue
-            title = (a.get("title") or "").strip()
-            link = (a.get("link") or "").strip()
+    if isinstance(rows, list):
+        for r in rows:
+            title = (r.get("title") or "").strip()
+            link = (r.get("link") or "").strip()
             if not title or not link:
                 continue
-            items.append({"headline": title, "url": link, "published": pub,
-                          "summary": (a.get("content") or "")[:4000],
+            pub = None
+            raw = str(r.get("date") or "")
+            for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    pub = datetime.strptime(raw[:19 if "T" in raw else 19], fmt.replace("%z", ""))
+                    break
+                except ValueError:
+                    continue
+            items.append({"headline": title, "url": link,
+                          "published": pub or datetime.utcnow(),
+                          "summary": (r.get("content") or "")[:2000],
                           "wire": "EODHD"})
     return items
