@@ -1371,3 +1371,29 @@ def eodhd_debug(ticker: str = "VZLA"):
         except Exception as exc:  # noqa: BLE001
             out[name] = {"error": str(exc)[:200]}
     return out
+
+
+# ------------------------------------------------- EODHD engine self-test
+@router.post("/api/admin/eodhd-selftest")
+def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
+    """Validate the EODHD engine against a real symbol from this server."""
+    from .config import settings as _s
+    if not _s.eodhd_api_key:
+        return {"key_present": False,
+                "fix": "Add EODHD_API_KEY in Render -> orelens-api -> Environment"}
+    from .services import eodhd as _e
+    d = _e.fetch_company_data(ticker, exchange, "6mo")
+    news = _e.fetch_news(ticker, exchange, days=14)
+    return {
+        "key_present": True, "symbol": _e._symbol(ticker, exchange),
+        "price_days": len(d["prices"]),
+        "latest_price_day": d["prices"][-1]["date"].isoformat() if d["prices"] else None,
+        "shares_outstanding": d["shares_outstanding"],
+        "cash_latest": d["cash"], "monthly_burn": d["monthly_burn"],
+        "cash_quarters": len(d["cash_history"]),
+        "shares_quarters": len(d["shares_history"]),
+        "financing_cf_quarters": len(d["financing_cf_history"]),
+        "sector": d["sector"], "industry": d["industry"],
+        "news_items_14d": len(news),
+        "news_sample": [n["headline"][:80] for n in news[:3]],
+    }
