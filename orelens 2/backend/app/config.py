@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     polygon_api_key: str = ""      # optional alternative
     anthropic_api_key: str = ""    # for MD&A / financial statement extraction
     eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
+    eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
     cost_per_meter_default: float = 250.0  # CAD, all-in diamond drilling default
     class Config:
         env_file = ".env"
