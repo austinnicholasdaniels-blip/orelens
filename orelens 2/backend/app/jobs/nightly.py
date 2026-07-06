@@ -31,7 +31,7 @@ log = logging.getLogger("orelens.nightly")
 
 async def sync_prices(db: Session) -> None:
     from starlette.concurrency import run_in_threadpool
-    from ..services import yahoo
+    from ..services import marketdata as yahoo
     for c in db.execute(select(Company)).scalars():
         data = await run_in_threadpool(yahoo.fetch_company_data, c.ticker, c.exchange, "5d")
         last = data["prices"][-1] if data["prices"] else None
@@ -137,7 +137,18 @@ async def sync_newswires(db: Session) -> dict:
     import re as _re
     tickers = {c.ticker: c.id for c in db.execute(select(Company)).scalars()}
     names = {c.name.lower(): c.id for c in db.execute(select(Company)).scalars()}
-    wire_items = ingest.fetch_wire_items()
+    from ..config import settings as _settings
+    if _settings.eodhd_api_key:
+        from ..services import eodhd as _eodhd
+        wire_items = []
+        comps = db.execute(select(Company)).scalars().all()
+        for c in comps:
+            try:
+                wire_items.extend(_eodhd.fetch_news(c.ticker, c.exchange, days=4))
+            except Exception:  # noqa: BLE001
+                continue
+    else:
+        wire_items = ingest.fetch_wire_items()
     stored = 0
     for item in wire_items:
         if db.execute(select(PressRelease).where(PressRelease.url == item["url"])).scalar_one_or_none():
