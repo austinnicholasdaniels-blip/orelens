@@ -29,6 +29,9 @@ def _symbol(ticker: str, exchange: str) -> str:
     return f"{ticker.upper()}{SUFFIX.get(exchange.upper(), '.V')}"
 
 
+_sym = _symbol   # legacy alias
+
+
 def _get(path: str, params: dict) -> object | None:
     params = {**params, "api_token": settings.eodhd_api_key, "fmt": "json"}
     try:
