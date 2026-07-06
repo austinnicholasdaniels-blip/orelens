@@ -1351,7 +1351,7 @@ def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
     d = _e.fetch_company_data(ticker, exchange, "6mo")
     news = _e.fetch_news(ticker, exchange, days=14)
     return {
-        "key_present": True, "symbol": _e._sym(ticker, exchange),
+        "key_present": True, "symbol": _e._symbol(ticker, exchange),
         "price_days": len(d["prices"]),
         "latest_price_day": d["prices"][-1]["date"].isoformat() if d["prices"] else None,
         "shares_outstanding": d["shares_outstanding"],
