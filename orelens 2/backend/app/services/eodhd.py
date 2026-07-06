@@ -60,6 +60,9 @@ def _qdate(s: str):
         return None
 
 
+SIBLING = {"TSXV": "TSX", "TSX": "TSXV", "CSE": "TSXV"}
+
+
 def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
     """Same contract as yahoo.fetch_company_data. Returns:
     prices, shares_outstanding, cash, cash_history, monthly_burn,
@@ -68,10 +71,23 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
     out = {"prices": [], "shares_outstanding": None, "cash": None,
            "cash_history": [], "monthly_burn": None, "shares_history": [],
            "sector": None, "industry": None, "description": None,
-           "financing_cf_history": []}
+           "financing_cf_history": [], "resolved_exchange": exchange.upper()}
     if not settings.eodhd_api_key:
         return out
+    exchange = exchange.upper()
     sym = _symbol(ticker, exchange)
+    # self-heal: juniors graduate TSXV -> TSX (and vice versa). If the
+    # requested board has no prices, probe the sibling and use it.
+    probe = _get(f"eod/{sym}", {"from": (date.today() - timedelta(days=30)).isoformat()})
+    if not (isinstance(probe, list) and probe) and exchange in SIBLING:
+        alt = SIBLING[exchange]
+        alt_sym = _symbol(ticker, alt)
+        alt_probe = _get(f"eod/{alt_sym}",
+                         {"from": (date.today() - timedelta(days=30)).isoformat()})
+        if isinstance(alt_probe, list) and alt_probe:
+            exchange, sym = alt, alt_sym
+            out["resolved_exchange"] = alt
+            log.info("EODHD self-heal: %s resolved to %s", ticker, alt_sym)
 
     # ---- prices --------------------------------------------------------
     frm = (date.today() - timedelta(days=PERIOD_DAYS.get(period, 185))).isoformat()
@@ -145,9 +161,21 @@ def fetch_news(ticker: str, exchange: str, days: int = 5, limit: int = 25) -> li
     wire-item shape the nightly consumes: headline/url/published/summary/wire."""
     if not settings.eodhd_api_key:
         return []
-    sym = _symbol(ticker, exchange)
     frm = (date.today() - timedelta(days=days)).isoformat()
-    rows = _get("news", {"s": sym, "from": frm, "limit": limit})
+    # fallback chain: requested board -> US listing (dual-listed juniors file
+    # fresh news under the US symbol) -> sibling Canadian board
+    rows = None
+    tried = []
+    for suf in [SUFFIX.get(exchange.upper(), ".V"), ".US",
+                SUFFIX.get(SIBLING.get(exchange.upper(), ""), None)]:
+        if not suf or suf in tried:
+            continue
+        tried.append(suf)
+        cand = _get("news", {"s": f"{ticker.upper()}{suf}", "from": frm,
+                             "limit": limit})
+        if isinstance(cand, list) and cand:
+            rows = cand
+            break
     items = []
     if isinstance(rows, list):
         for r in rows:
