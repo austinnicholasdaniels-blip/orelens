@@ -118,11 +118,11 @@ async def load_universe(db: Session = Depends(get_db)):
             db.flush()
             added.append(tick)
 
-        data = await run_in_threadpool(yahoo.fetch_company_data, tick, exch)
+        data = await run_in_threadpool(marketdata.fetch_company_data, tick, exch)
         # self-heal exchange migrations (TSXV graduations to TSX and vice versa)
         if not data["prices"] and exch in ("TSX", "TSXV"):
             alt = "TSX" if exch == "TSXV" else "TSXV"
-            alt_data = await run_in_threadpool(yahoo.fetch_company_data, tick, alt)
+            alt_data = await run_in_threadpool(marketdata.fetch_company_data, tick, alt)
             if alt_data["prices"]:
                 data = alt_data
                 c.exchange = alt
