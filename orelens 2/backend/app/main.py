@@ -179,7 +179,7 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
              "change_pct": (round(100 * (s.cash - cash_snaps[i - 1].cash)
                                   / cash_snaps[i - 1].cash, 1)
                             if i and cash_snaps[i - 1].cash else None)}
-            for i, s in enumerate(cash_snaps)],
+            for i, s in enumerate(cash_snaps) if s.as_of.year >= 2022],
         "promotions": [
             {"announced": p.announced.isoformat(), "firm": p.firm,
              "amount": p.amount, "monthly_fee": p.monthly_fee,
@@ -202,9 +202,67 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
              "added_pct": (round(100 * (h.shares - shares_hist[i - 1].shares)
                                  / shares_hist[i - 1].shares, 1)
                            if i and shares_hist[i - 1].shares else None)}
-            for i, h in enumerate(shares_hist)],
+            for i, h in enumerate(shares_hist) if h.as_of.year >= 2022],
         "comparison": comparison,
+        "dilution_stats": _dilution_stats(db, c, shares_hist, cash_snaps),
     }
+
+
+def _dilution_stats(db, company, shares_hist, cash_snaps):
+    """The dilution biography, condensed: growth rates, raise events with
+    estimated dollars, ownership drag, and news-adjusted runway."""
+    from datetime import timedelta as _td
+    out = {}
+    if shares_hist:
+        last = shares_hist[-1]
+
+        def _growth(years):
+            cutoff = date.today() - _td(days=int(years * 365.25))
+            base = next((h for h in shares_hist if h.as_of >= cutoff), None)
+            if base and base.shares and base is not last:
+                return round(100 * (last.shares - base.shares) / base.shares, 1)
+            return None
+        out["shares_growth_1y_pct"] = _growth(1)
+        out["shares_growth_3y_pct"] = _growth(3)
+        out["shares_growth_5y_pct"] = _growth(5)
+        g3 = out["shares_growth_3y_pct"]
+        if g3 is not None:
+            # what 100 shares three years ago represent today, as ownership
+            out["ownership_drag_3y_pct"] = round(100 * (1 - 1 / (1 + g3 / 100)), 1)
+        # raise events + estimated dollars (shares added x price at the time)
+        events, est_total = [], 0.0
+        cutoff3 = date.today() - _td(days=int(3 * 365.25))
+        for prev, cur in zip(shares_hist, shares_hist[1:]):
+            if cur.as_of < cutoff3 or not prev.shares:
+                continue
+            pct = 100 * (cur.shares - prev.shares) / prev.shares
+            if pct < 2.0:
+                continue
+            px_row = db.execute(select(models.DailyPrice).where(
+                models.DailyPrice.company_id == company.id,
+                models.DailyPrice.day <= cur.as_of)
+                .order_by(models.DailyPrice.day.desc()).limit(1)).scalar_one_or_none()
+            est = (cur.shares - prev.shares) * px_row.close if px_row else None
+            if est:
+                est_total += est
+            events.append({"date": cur.as_of.isoformat(), "pct": round(pct, 1),
+                           "shares_added_m": round((cur.shares - prev.shares) / 1e6, 1),
+                           "est_raised_m": est and round(est / 1e6, 1)})
+        out["raise_events_3y"] = events
+        out["est_capital_raised_3y_m"] = round(est_total / 1e6, 1) if est_total else None
+    if cash_snaps:
+        fin = cash_snaps[-1]
+        if fin.cash and fin.monthly_burn:
+            out["runway_m"] = round(fin.cash / fin.monthly_burn, 1)
+            raised = sum(f.amount for f in db.execute(select(models.Financing).where(
+                models.Financing.company_id == company.id,
+                models.Financing.closed.is_(True),
+                models.Financing.close_date.is_not(None),
+                models.Financing.close_date > fin.as_of)).scalars() if f.amount)
+            if raised:
+                out["raised_since_snapshot_m"] = round(raised / 1e6, 1)
+                out["adjusted_runway_m"] = round((fin.cash + raised) / fin.monthly_burn, 1)
+    return out
 
 
 @app.post("/api/jobs/nightly")
