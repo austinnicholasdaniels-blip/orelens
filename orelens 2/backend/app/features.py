@@ -57,10 +57,10 @@ async def add_ticker(body: AddTickerBody, db: Session = Depends(get_db)):
         db.add(c)
         db.flush()
 
-    data = await run_in_threadpool(yahoo.fetch_company_data, tick, c.exchange)
+    data = await run_in_threadpool(marketdata.fetch_company_data, tick, c.exchange)
     if not data["prices"] and c.exchange in ("TSX", "TSXV"):
         alt = "TSX" if c.exchange == "TSXV" else "TSXV"
-        alt_data = await run_in_threadpool(yahoo.fetch_company_data, tick, alt)
+        alt_data = await run_in_threadpool(marketdata.fetch_company_data, tick, alt)
         if alt_data["prices"]:
             data, c.exchange = alt_data, alt
     if not data["prices"]:
