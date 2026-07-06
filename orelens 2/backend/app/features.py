@@ -275,7 +275,10 @@ def all_stocks(commodity: str | None = None, tier: str | None = None,
 def news_feed(commodity: str | None = None, tier: str | None = None,
               db: Session = Depends(get_db)):
     """Latest mining press releases from the nightly wire sync, newest first."""
+    from datetime import datetime as _dtt, timedelta as _tdd
+    cutoff = _dtt.utcnow() - _tdd(days=5)
     rows = db.execute(select(models.PressRelease)
+                      .where(models.PressRelease.published >= cutoff)
                       .order_by(_desc(models.PressRelease.published))
                       .limit(150)).scalars().all()
     companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
@@ -1867,11 +1870,19 @@ def _run_news_refresh(days: int, purge_bunched: bool) -> None:
                 items = _e.fetch_news(c.ticker, c.exchange, days, 20)
             except Exception:  # noqa: BLE001
                 items = []
+            core = _core_name(c.name)
             for item in items:
                 if item["url"] in seen_urls:
                     continue
-                seen_urls.add(item["url"])
                 text = f"{item['headline']} {item['summary']}"
+                low = text.lower()
+                # attribution guard: ticker collisions across exchanges (e.g.
+                # CNC.V Canada Nickel vs CNC NYSE Centene) mean a per-ticker
+                # feed can carry a stranger's news. Store only if the article
+                # names the company or plainly reads as mining.
+                if core not in low and not any(h in low for h in MINING_HINTS):
+                    continue
+                seen_urls.add(item["url"])
                 db.add(models.PressRelease(
                     company_id=c.id, published=item["published"],
                     headline=item["headline"][:400], url=item["url"][:400],
@@ -1922,3 +1933,261 @@ def refresh_news(days: int = 30, purge_bunched: bool = True):
 @router.get("/api/admin/refresh-news-status")
 def refresh_news_status():
     return _NEWS_STATUS
+
+
+@router.post("/api/admin/clean-news")
+def clean_news(db: Session = Depends(get_db)):
+    """Purge stored news that fails attribution: doesn't name its company and
+    doesn't read as mining (ticker-collision fallout like CNC/Centene)."""
+    removed = 0
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+    for r in db.execute(select(models.PressRelease).where(
+            models.PressRelease.wire == "EODHD")).scalars().all():
+        c = companies.get(r.company_id)
+        if not c:
+            continue
+        low = f"{r.headline} {r.body or ''}".lower()
+        if _core_name(c.name) not in low and not any(h in low for h in MINING_HINTS):
+            db.delete(r)
+            removed += 1
+    db.commit()
+    return {"unrelated_news_removed": removed}
+
+
+# --------------------------------------------- universe expansion (US + CA)
+US_MINERS = [
+    ("NEM","NYSE","Newmont Corporation","Gold"),("GOLD","NYSE","Barrick Gold","Gold"),
+    ("AEM","NYSE","Agnico Eagle Mines","Gold"),("KGC","NYSE","Kinross Gold","Gold"),
+    ("AU","NYSE","AngloGold Ashanti","Gold"),("GFI","NYSE","Gold Fields","Gold"),
+    ("HMY","NYSE","Harmony Gold","Gold"),("EGO","NYSE","Eldorado Gold","Gold"),
+    ("IAG","NYSE","IAMGOLD","Gold"),("BTG","NYSE","B2Gold","Gold"),
+    ("AGI","NYSE","Alamos Gold","Gold"),("OR","NYSE","Osisko Gold Royalties","Gold"),
+    ("WPM","NYSE","Wheaton Precious Metals","Silver"),("FNV","NYSE","Franco-Nevada","Gold"),
+    ("RGLD","NASDAQ","Royal Gold","Gold"),("SAND","NYSE","Sandstorm Gold","Gold"),
+    ("PAAS","NYSE","Pan American Silver","Silver"),("AG","NYSE","First Majestic Silver","Silver"),
+    ("HL","NYSE","Hecla Mining","Silver"),("CDE","NYSE","Coeur Mining","Silver"),
+    ("EXK","NYSE","Endeavour Silver","Silver"),("FSM","NYSE","Fortuna Mining","Silver"),
+    ("MAG","NYSE","MAG Silver","Silver"),("SILV","NYSE","SilverCrest Metals","Silver"),
+    ("GATO","NYSE","Gatos Silver","Silver"),("USAS","NYSE","Americas Gold and Silver","Silver"),
+    ("FCX","NYSE","Freeport-McMoRan","Copper"),("SCCO","NYSE","Southern Copper","Copper"),
+    ("ERO","NYSE","Ero Copper","Copper"),("HBM","NYSE","Hudbay Minerals","Copper"),
+    ("TGB","NYSE","Taseko Mines","Copper"),("CCJ","NYSE","Cameco","Uranium"),
+    ("UEC","NYSE","Uranium Energy Corp","Uranium"),("DNN","NYSE","Denison Mines","Uranium"),
+    ("NXE","NYSE","NexGen Energy","Uranium"),("UUUU","NYSE","Energy Fuels","Uranium"),
+    ("URG","NYSE","Ur-Energy","Uranium"),("LAC","NYSE","Lithium Americas","Lithium"),
+    ("PLL","NASDAQ","Piedmont Lithium","Lithium"),("SGML","NASDAQ","Sigma Lithium","Lithium"),
+    ("MP","NYSE","MP Materials","Rare Earths"),("TMC","NASDAQ","TMC the metals company","Nickel"),
+    ("VALE","NYSE","Vale","Iron Ore"),("RIO","NYSE","Rio Tinto","Diversified"),
+    ("BHP","NYSE","BHP Group","Diversified"),("TECK","NYSE","Teck Resources","Diversified"),
+    ("NGD","NYSE","New Gold","Gold"),("EQX","NYSE","Equinox Gold","Gold"),
+    ("SSRM","NASDAQ","SSR Mining","Gold"),("ORLA","NYSE","Orla Mining","Gold"),
+    ("SKE","NYSE","Skeena Resources","Gold"),("ITRG","NYSE","Integra Resources","Gold"),
+    ("IDR","NYSE","Idaho Strategic Resources","Gold"),("PPTA","NASDAQ","Perpetua Resources","Gold"),
+    ("VZLA","NYSE","Vizsla Silver","Silver"),("DV","TSXV","Dolly Varden Silver","Silver"),
+    ("SEA","TSX","Seabridge Gold","Gold"),("MND","TSX","Mandalay Resources","Gold"),
+    ("KNT","TSXV","K92 Mining","Gold"),("ARIS","TSX","Aris Mining","Gold"),
+    ("LUG","TSX","Lundin Gold","Gold"),("MOZ","TSX","Marathon Gold","Gold"),
+]
+
+_EXPAND_STATUS: dict = {"state": "idle"}
+
+
+def _run_expand_universe() -> None:
+    from .db import SessionLocal
+    from .jobs.nightly import run_grades
+    db = SessionLocal()
+    stats = {"state": "running", "added": [], "skipped_existing": 0,
+             "no_data": [], "done": 0, "total": len(US_MINERS)}
+    _EXPAND_STATUS.clear(); _EXPAND_STATUS.update(stats)
+    try:
+        for tick, exch, name, commodity in US_MINERS:
+            existing = db.execute(select(models.Company).where(
+                models.Company.ticker == tick)).scalar_one_or_none()
+            if existing:
+                stats["skipped_existing"] += 1
+                stats["done"] += 1
+                _EXPAND_STATUS.update(stats)
+                continue
+            try:
+                data = marketdata.fetch_company_data(tick, exch, "5y")
+            except Exception:  # noqa: BLE001
+                data = {"prices": []}
+            if not data["prices"]:
+                stats["no_data"].append(tick)
+                stats["done"] += 1
+                _EXPAND_STATUS.update(stats)
+                continue
+            c = models.Company(
+                ticker=tick, exchange=data.get("resolved_exchange") or exch,
+                name=name, commodity=commodity, jurisdiction="",
+                jurisdiction_tier="Tier 1", project_name="",
+                shares_outstanding=data.get("shares_outstanding") or 0)
+            db.add(c); db.flush()
+            for row in data["prices"]:
+                db.add(models.DailyPrice(company_id=c.id, day=row["date"],
+                                         close=row["close"], volume=row["volume"]))
+            for ch in data.get("cash_history", []):
+                db.add(models.FinancialSnapshot(
+                    company_id=c.id, as_of=ch["as_of"], cash=ch["cash"],
+                    monthly_burn=data.get("monthly_burn") or 0.0,
+                    source_filing="EODHD quarterly balance sheet (SEDAR/SEC)"))
+            for sh in data.get("shares_history", []):
+                db.add(models.SharesHistory(company_id=c.id, as_of=sh["as_of"],
+                                            shares=sh["shares"]))
+            db.commit()
+            stats["added"].append(tick)
+            stats["done"] += 1
+            _EXPAND_STATUS.update(stats)
+        run_grades(db)
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _EXPAND_STATUS.update(stats)
+
+
+@router.post("/api/admin/expand-universe")
+def expand_universe():
+    """Add ~60 US-listed and Canadian miners (5y history each) in the
+    background. Poll expand-universe-status."""
+    import threading
+    if _EXPAND_STATUS.get("state") == "running":
+        return {"started": False, "progress": _EXPAND_STATUS}
+    threading.Thread(target=_run_expand_universe, daemon=True).start()
+    return {"started": True, "check_progress": "GET /api/admin/expand-universe-status"}
+
+
+@router.get("/api/admin/expand-universe-status")
+def expand_universe_status():
+    return _EXPAND_STATUS
+
+
+# ------------------------------------- market-wide financing sweep (unlocks)
+FIN_QUERIES = [
+    '"closes" "private placement" TSXV',
+    '"closes private placement" mining',
+    '"closing of" "private placement" "TSX Venture"',
+    '"bought deal" "closing" mining',
+    '"announces" "private placement" TSXV mining',
+    '"upsized" "private placement" mining',
+]
+
+_FINSWEEP_STATUS: dict = {"state": "idle"}
+
+
+def _run_financing_sweep(days: int) -> None:
+    import re as _re
+    import feedparser as _fp
+    import httpx as _hx
+    from datetime import datetime as _dt, timedelta as _td
+    from urllib.parse import quote_plus as _qp
+    from .db import SessionLocal
+    from .jobs.nightly import _upsert_financing
+    from .services import financing as _finmod
+    from .services import promotion as _promo
+    db = SessionLocal()
+    issuer_pat = _re.compile(ISSUER_PAT_SRC)
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")}
+    stats = {"state": "running", "headlines_seen": 0, "pages_fetched": 0,
+             "financings_filed": 0, "companies_added": [], "queries_done": 0,
+             "queries_total": len(FIN_QUERIES)}
+    _FINSWEEP_STATUS.clear(); _FINSWEEP_STATUS.update(stats)
+    try:
+        cutoff = _dt.utcnow() - _td(days=days)
+        seen: set[str] = set()
+        with _hx.Client(timeout=25, headers=ua, follow_redirects=True) as client:
+            for query in FIN_QUERIES:
+                url = (f"https://news.google.com/rss/search?q={_qp(query + f' when:{days}d')}"
+                       "&hl=en-CA&gl=CA&ceid=CA:en")
+                try:
+                    feed = _fp.parse(client.get(url).content)
+                except Exception:  # noqa: BLE001
+                    stats["queries_done"] += 1
+                    continue
+                for e in feed.entries:
+                    link, title = e.get("link", ""), e.get("title", "")
+                    if not link or link in seen:
+                        continue
+                    seen.add(link)
+                    stats["headlines_seen"] += 1
+                    pub = (_dt(*e.published_parsed[:6])
+                           if e.get("published_parsed") else None)
+                    if not pub or pub < cutoff:
+                        continue
+                    real = _gnews_real_url(link)
+                    if not real:
+                        try:
+                            real = _gnews_real_url(link, client.get(link).text)
+                        except Exception:  # noqa: BLE001
+                            continue
+                    if not real:
+                        continue
+                    try:
+                        text = _promo.html_to_text(client.get(real).text)[:80_000]
+                    except Exception:  # noqa: BLE001
+                        continue
+                    stats["pages_fetched"] += 1
+                    low = text.lower()
+                    if not any(h in low for h in MINING_HINTS):
+                        continue
+                    parsed = _finmod.parse_financing(text[:6000])
+                    if not parsed:
+                        continue
+                    m = issuer_pat.search(text[:8000])
+                    if not m:
+                        continue
+                    name = m.group(1).strip(" ,.")
+                    name = _re.split(r"\s[\-\u2013\u2014]{1,2}\s|--|\)\s", name)[-1].strip(" ,.-")
+                    ticker = m.group(3).upper()
+                    exchange = "TSXV" if "V" in m.group(2).upper().replace("TSX", "") \
+                               or "VENTURE" in m.group(2).upper() else "TSX"
+                    if len(name) < 4:
+                        continue
+                    c = db.execute(select(models.Company).where(
+                        models.Company.ticker == ticker)).scalar_one_or_none()
+                    if not c:
+                        c = models.Company(ticker=ticker, exchange=exchange,
+                                           name=name, commodity="Unclassified",
+                                           jurisdiction="", jurisdiction_tier="Tier 1",
+                                           project_name="", shares_outstanding=0)
+                        db.add(c); db.flush()
+                        stats["companies_added"].append(f"{ticker} ({name})")
+                    if not _title_mentions(c, title) and c.name.lower() not in low[:3000]:
+                        continue
+                    _upsert_financing(db, c.id, pub, title[:400], real[:400], parsed)
+                    stats["financings_filed"] += 1
+                    db.commit()
+                stats["queries_done"] += 1
+                _FINSWEEP_STATUS.update(stats)
+        fins = db.execute(select(models.Financing).where(
+            models.Financing.closed.is_(True))).scalars().all()
+        stats["closed_financings_total"] = len(fins)
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _FINSWEEP_STATUS.update(stats)
+
+
+@router.post("/api/admin/scan-financings-market")
+def scan_financings_market(days: int = 150):
+    """Market-wide financing sweep: find placement closings across ALL TSXV/
+    TSX miners (auto-adding unknown issuers) so the Unlock Calendar covers
+    the whole market, not just tracked names. Background job."""
+    import threading
+    if _FINSWEEP_STATUS.get("state") == "running":
+        return {"started": False, "progress": _FINSWEEP_STATUS}
+    threading.Thread(target=_run_financing_sweep, args=(days,),
+                     daemon=True).start()
+    return {"started": True, "days": days,
+            "check_progress": "GET /api/admin/scan-financings-market-status"}
+
+
+@router.get("/api/admin/scan-financings-market-status")
+def scan_financings_market_status():
+    return _FINSWEEP_STATUS
