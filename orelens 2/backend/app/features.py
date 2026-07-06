@@ -1827,65 +1827,98 @@ def bullish_setups(commodity: str | None = None, tier: str | None = None,
 
 
 # ------------------------------------------------ EODHD news refresh (mining)
-@router.post("/api/admin/refresh-news")
-async def refresh_news(days: int = 30, purge_bunched: bool = True,
-                       db: Session = Depends(get_db)):
-    """Pull licensed per-ticker news for every tracked mining company right
-    now, with real timestamps. Optionally purge the old scraped rows whose
-    timestamps were all stamped at fetch time (the bunching defect)."""
-    from starlette.concurrency import run_in_threadpool
+_NEWS_STATUS: dict = {"state": "idle"}
+
+
+def _run_news_refresh(days: int, purge_bunched: bool) -> None:
     from collections import Counter
+    from .db import SessionLocal
     from .config import settings as _s
     from .services import eodhd as _e
     from .services import financing as _finmod
     from .services import promotion as _promo
     from .jobs.nightly import _upsert_financing, _upsert_promotion
+    db = SessionLocal()
+    stats = {"state": "running", "companies_done": 0, "companies_total": 0,
+             "news_stored": 0, "bunched_rows_purged": 0,
+             "financings_detected": 0, "promotions_detected": 0}
+    _NEWS_STATUS.clear(); _NEWS_STATUS.update(stats)
+    try:
+        if purge_bunched:
+            stamps = Counter()
+            rows = db.execute(select(models.PressRelease).where(
+                models.PressRelease.wire.like("Newsfile%"))).scalars().all()
+            for r in rows:
+                if r.published:
+                    stamps[r.published.replace(microsecond=0)] += 1
+            bad = {s for s, n in stamps.items() if n >= 8}
+            for r in rows:
+                if r.published and r.published.replace(microsecond=0) in bad:
+                    db.delete(r)
+                    stats["bunched_rows_purged"] += 1
+            db.commit()
+
+        # one article often tags several tickers - dedupe across the whole run
+        seen_urls = {u for (u,) in db.execute(select(models.PressRelease.url))}
+        companies = db.execute(select(models.Company)).scalars().all()
+        stats["companies_total"] = len(companies)
+        for c in companies:
+            try:
+                items = _e.fetch_news(c.ticker, c.exchange, days, 20)
+            except Exception:  # noqa: BLE001
+                items = []
+            for item in items:
+                if item["url"] in seen_urls:
+                    continue
+                seen_urls.add(item["url"])
+                text = f"{item['headline']} {item['summary']}"
+                db.add(models.PressRelease(
+                    company_id=c.id, published=item["published"],
+                    headline=item["headline"][:400], url=item["url"][:400],
+                    wire="EODHD", body=item["summary"], is_drill_start=False))
+                stats["news_stored"] += 1
+                fpar = _finmod.parse_financing(text)
+                if fpar:
+                    _upsert_financing(db, c.id, item["published"],
+                                      item["headline"][:400], item["url"][:400], fpar)
+                    stats["financings_detected"] += 1
+                ppar = _promo.parse_promotion(text)
+                if ppar:
+                    _upsert_promotion(db, c.id, item["published"],
+                                      item["headline"][:400], item["url"][:400], ppar)
+                    stats["promotions_detected"] += 1
+            db.commit()
+            stats["companies_done"] += 1
+            _NEWS_STATUS.update(stats)
+        stats["state"] = "done"
+        stats["press_releases_total"] = len(
+            db.execute(select(models.PressRelease)).scalars().all())
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"
+        stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _NEWS_STATUS.update(stats)
+
+
+@router.post("/api/admin/refresh-news")
+def refresh_news(days: int = 30, purge_bunched: bool = True):
+    """Kick off the licensed-news refresh in the background and return
+    immediately. Poll refresh-news-status for progress."""
+    import threading
+    from .config import settings as _s
     if not _s.eodhd_api_key:
         return {"error": "EODHD_API_KEY not configured"}
+    if _NEWS_STATUS.get("state") == "running":
+        return {"started": False, "reason": "already running",
+                "progress": _NEWS_STATUS}
+    threading.Thread(target=_run_news_refresh, args=(days, purge_bunched),
+                     daemon=True).start()
+    return {"started": True, "days": days,
+            "check_progress": "GET /api/admin/refresh-news-status"}
 
-    purged = 0
-    if purge_bunched:
-        stamps = Counter()
-        rows = db.execute(select(models.PressRelease).where(
-            models.PressRelease.wire.like("Newsfile%"))).scalars().all()
-        for r in rows:
-            if r.published:
-                stamps[r.published.replace(microsecond=0)] += 1
-        bad = {s for s, n in stamps.items() if n >= 8}
-        for r in rows:
-            if r.published and r.published.replace(microsecond=0) in bad:
-                db.delete(r)
-                purged += 1
-        db.flush()
 
-    stored = 0
-    companies = db.execute(select(models.Company)).scalars().all()
-    for c in companies:
-        try:
-            items = await run_in_threadpool(_e.fetch_news, c.ticker,
-                                            c.exchange, days, 20)
-        except Exception:  # noqa: BLE001
-            continue
-        for item in items:
-            if db.execute(select(models.PressRelease).where(
-                    models.PressRelease.url == item["url"])).scalar_one_or_none():
-                continue
-            text = f"{item['headline']} {item['summary']}"
-            db.add(models.PressRelease(
-                company_id=c.id, published=item["published"],
-                headline=item["headline"][:400], url=item["url"][:400],
-                wire="EODHD", body=item["summary"],
-                is_drill_start=False))
-            stored += 1
-            fpar = _finmod.parse_financing(text)
-            if fpar:
-                _upsert_financing(db, c.id, item["published"],
-                                  item["headline"][:400], item["url"][:400], fpar)
-            ppar = _promo.parse_promotion(text)
-            if ppar:
-                _upsert_promotion(db, c.id, item["published"],
-                                  item["headline"][:400], item["url"][:400], ppar)
-    db.commit()
-    total = len(db.execute(select(models.PressRelease)).scalars().all())
-    return {"companies": len(companies), "news_stored": stored,
-            "bunched_rows_purged": purged, "press_releases_total": total}
+@router.get("/api/admin/refresh-news-status")
+def refresh_news_status():
+    return _NEWS_STATUS
