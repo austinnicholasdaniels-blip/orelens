@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from . import models
-from .services import yahoo
+from .services import marketdata as yahoo
 
 log = logging.getLogger("orelens.features")
 router = APIRouter()
@@ -285,7 +285,7 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
         # industry feeds ever show. Kills all junk from the old PRNewswire /
         # Accesswire / GlobeNewswire general feeds (including rows those
         # feeds false-matched to tracked tickers) without a database purge.
-        if not r.wire.startswith("Newsfile"):
+        if not r.wire.startswith(("Newsfile", "EODHD")):
             continue
         if commodity and (not c or c.commodity != commodity):
             continue
@@ -1336,3 +1336,30 @@ def beta_signups(db: Session = Depends(get_db)):
          "phone": f"{r.country_code} {r.phone}",
          "account_size": r.account_size,
          "signed_up": r.created.isoformat()} for r in rows]}
+
+
+# ------------------------------------------------- EODHD engine selftest
+@router.post("/api/admin/eodhd-selftest")
+def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
+    """Validate the EODHD engine against a real symbol from this server
+    (where the key and network live). Reports coverage per dataset."""
+    from .config import settings as _s
+    if not _s.eodhd_api_key:
+        return {"key_present": False,
+                "fix": "Add EODHD_API_KEY in Render -> orelens-api -> Environment"}
+    from .services import eodhd as _e
+    d = _e.fetch_company_data(ticker, exchange, "6mo")
+    news = _e.fetch_news(ticker, exchange, days=14)
+    return {
+        "key_present": True, "symbol": _e._sym(ticker, exchange),
+        "price_days": len(d["prices"]),
+        "latest_price_day": d["prices"][-1]["date"].isoformat() if d["prices"] else None,
+        "shares_outstanding": d["shares_outstanding"],
+        "cash_latest": d["cash"], "monthly_burn": d["monthly_burn"],
+        "cash_quarters": len(d["cash_history"]),
+        "shares_quarters": len(d["shares_history"]),
+        "financing_cf_quarters": len(d["financing_cf_history"]),
+        "sector": d["sector"], "industry": d["industry"],
+        "news_items_14d": len(news),
+        "news_sample": [n["headline"][:80] for n in news[:3]],
+    }
