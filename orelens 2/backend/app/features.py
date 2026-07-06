@@ -1622,6 +1622,21 @@ def _raise_events(hist, years=3):
     return events
 
 
+
+
+def _raises_since(db, cid, since):
+    """Closed financings with close_date after `since` - the money the
+    quarterly snapshot doesn't know about yet (the PNPN problem)."""
+    rows = db.execute(select(models.Financing).where(
+        models.Financing.company_id == cid,
+        models.Financing.closed.is_(True),
+        models.Financing.close_date.is_not(None),
+        models.Financing.close_date > since)).scalars().all()
+    total = sum(r.amount for r in rows if r.amount)
+    latest = max((r.close_date for r in rows), default=None)
+    return total, latest, len(rows)
+
+
 @router.get("/api/scanners/dilution-risk")
 def dilution_risk(commodity: str | None = None, tier: str | None = None,
                   db: Session = Depends(get_db)):
@@ -1662,6 +1677,15 @@ def dilution_risk(commodity: str | None = None, tier: str | None = None,
             lo, last = min(closes), closes[-1]
             if lo and last <= lo * 1.20:
                 score += 10; why.append("near 52w low")
+        # news-aware: a raise closed AFTER the cash snapshot means the
+        # treasury is fuller than the quarterly figure - probability drops
+        raised, raise_date, n_raises = _raises_since(db, c.id, fin.as_of)
+        adj_runway = runway
+        if raised and fin.monthly_burn:
+            adj_runway = (fin.cash + raised) / fin.monthly_burn
+            score = max(0, score - 35)
+            why.append(f"but raised ${raised/1e6:.1f}M on {raise_date} "
+                       f"(post-dates cash figure)")
         if score < 15:
             continue
         prob = ("VERY HIGH" if score >= 60 else "HIGH" if score >= 40
@@ -1670,8 +1694,8 @@ def dilution_risk(commodity: str | None = None, tier: str | None = None,
             "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
             "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
             "score": score, "probability": prob,
-            "runway_m": runway and round(runway, 1),
-            "cash_m": round(fin.cash / 1e6, 1),
+            "runway_m": adj_runway and round(adj_runway, 1),
+            "cash_m": round((fin.cash + (raised or 0)) / 1e6, 1),
             "raises_3y": len(events),
             "why": " - ".join(why), "grade": _grade_of(db, c.id),
         })
@@ -1692,14 +1716,18 @@ def burn_league(commodity: str | None = None, tier: str | None = None,
         fin = _latest_fin(db, c.id)
         if not fin or not fin.monthly_burn or not fin.cash:
             continue
-        runway = fin.cash / fin.monthly_burn
+        raised, raise_date, _n = _raises_since(db, c.id, fin.as_of)
+        adj_cash = fin.cash + (raised or 0)
+        runway = adj_cash / fin.monthly_burn
         out.append({
             "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
             "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
             "monthly_burn": round(fin.monthly_burn, 0),
-            "cash_m": round(fin.cash / 1e6, 1),
+            "cash_m": round(adj_cash / 1e6, 1),
+            "raised_since_m": raised and round(raised / 1e6, 1),
             "runway_m": round(runway, 1),
-            "as_of": fin.as_of.isoformat(),
+            "as_of": (f"{fin.as_of.isoformat()} + raise {raise_date}"
+                      if raised else fin.as_of.isoformat()),
             "grade": _grade_of(db, c.id),
         })
     out.sort(key=lambda x: x["runway_m"])
@@ -1796,3 +1824,68 @@ def bullish_setups(commodity: str | None = None, tier: str | None = None,
         })
     out.sort(key=lambda x: -x["score"])
     return out
+
+
+# ------------------------------------------------ EODHD news refresh (mining)
+@router.post("/api/admin/refresh-news")
+async def refresh_news(days: int = 30, purge_bunched: bool = True,
+                       db: Session = Depends(get_db)):
+    """Pull licensed per-ticker news for every tracked mining company right
+    now, with real timestamps. Optionally purge the old scraped rows whose
+    timestamps were all stamped at fetch time (the bunching defect)."""
+    from starlette.concurrency import run_in_threadpool
+    from collections import Counter
+    from .config import settings as _s
+    from .services import eodhd as _e
+    from .services import financing as _finmod
+    from .services import promotion as _promo
+    from .jobs.nightly import _upsert_financing, _upsert_promotion
+    if not _s.eodhd_api_key:
+        return {"error": "EODHD_API_KEY not configured"}
+
+    purged = 0
+    if purge_bunched:
+        stamps = Counter()
+        rows = db.execute(select(models.PressRelease).where(
+            models.PressRelease.wire.like("Newsfile%"))).scalars().all()
+        for r in rows:
+            if r.published:
+                stamps[r.published.replace(microsecond=0)] += 1
+        bad = {s for s, n in stamps.items() if n >= 8}
+        for r in rows:
+            if r.published and r.published.replace(microsecond=0) in bad:
+                db.delete(r)
+                purged += 1
+        db.flush()
+
+    stored = 0
+    companies = db.execute(select(models.Company)).scalars().all()
+    for c in companies:
+        try:
+            items = await run_in_threadpool(_e.fetch_news, c.ticker,
+                                            c.exchange, days, 20)
+        except Exception:  # noqa: BLE001
+            continue
+        for item in items:
+            if db.execute(select(models.PressRelease).where(
+                    models.PressRelease.url == item["url"])).scalar_one_or_none():
+                continue
+            text = f"{item['headline']} {item['summary']}"
+            db.add(models.PressRelease(
+                company_id=c.id, published=item["published"],
+                headline=item["headline"][:400], url=item["url"][:400],
+                wire="EODHD", body=item["summary"],
+                is_drill_start=False))
+            stored += 1
+            fpar = _finmod.parse_financing(text)
+            if fpar:
+                _upsert_financing(db, c.id, item["published"],
+                                  item["headline"][:400], item["url"][:400], fpar)
+            ppar = _promo.parse_promotion(text)
+            if ppar:
+                _upsert_promotion(db, c.id, item["published"],
+                                  item["headline"][:400], item["url"][:400], ppar)
+    db.commit()
+    total = len(db.execute(select(models.PressRelease)).scalars().all())
+    return {"companies": len(companies), "news_stored": stored,
+            "bunched_rows_purged": purged, "press_releases_total": total}
