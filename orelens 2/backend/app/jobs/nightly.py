@@ -50,6 +50,8 @@ async def sync_prices(db: Session) -> None:
                               close=quote["close"], volume=quote["volume"] or 0))
         if quote.get("shares_outstanding"):
             c.shares_outstanding = quote["shares_outstanding"]
+        if data.get("resolved_exchange") and data["resolved_exchange"] != c.exchange:
+            c.exchange = data["resolved_exchange"]   # uplisting self-heal
         for ch in data.get("cash_history", []):
             exists_fs = db.execute(select(FinancialSnapshot).where(
                 FinancialSnapshot.company_id == c.id,
