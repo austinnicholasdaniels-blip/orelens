@@ -1397,3 +1397,59 @@ def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
         "news_items_14d": len(news),
         "news_sample": [n["headline"][:80] for n in news[:3]],
     }
+
+
+# ---------------------------------------------- EODHD deep-history backfill
+@router.post("/api/admin/backfill-deep-history")
+async def backfill_deep_history(years: int = 5, db: Session = Depends(get_db)):
+    """The upgrade run: re-pull every tracked company through the licensed
+    engine with multi-year price history and the FULL quarterly cash/share
+    record, persist everything, fix stale exchanges, then re-grade."""
+    from starlette.concurrency import run_in_threadpool
+    period = f"{min(years, 10)}y"
+    stats = {"companies": 0, "price_rows_added": 0, "cash_quarters_added": 0,
+             "shares_quarters_added": 0, "exchanges_fixed": [],
+             "sectors_filled": 0, "no_data": []}
+    companies = db.execute(select(models.Company)).scalars().all()
+    for c in companies:
+        data = await run_in_threadpool(marketdata.fetch_company_data,
+                                       c.ticker, c.exchange, period)
+        if not data["prices"]:
+            stats["no_data"].append(c.ticker)
+            continue
+        stats["companies"] += 1
+        if data.get("resolved_exchange") and data["resolved_exchange"] != c.exchange:
+            stats["exchanges_fixed"].append(f"{c.ticker}: {c.exchange} -> {data['resolved_exchange']}")
+            c.exchange = data["resolved_exchange"]
+        if data.get("shares_outstanding"):
+            c.shares_outstanding = data["shares_outstanding"]
+        if c.commodity in (None, "", "Unclassified") and data.get("industry"):
+            c.commodity = (data["industry"] or "")[:40] or c.commodity
+            stats["sectors_filled"] += 1
+        have_days = {p.day for p in db.execute(select(models.DailyPrice).where(
+            models.DailyPrice.company_id == c.id)).scalars()}
+        for row in data["prices"]:
+            if row["date"] not in have_days:
+                db.add(models.DailyPrice(company_id=c.id, day=row["date"],
+                                         close=row["close"], volume=row["volume"]))
+                stats["price_rows_added"] += 1
+        have_fs = {s.as_of for s in db.execute(select(models.FinancialSnapshot).where(
+            models.FinancialSnapshot.company_id == c.id)).scalars()}
+        for ch in data["cash_history"]:
+            if ch["as_of"] not in have_fs:
+                db.add(models.FinancialSnapshot(
+                    company_id=c.id, as_of=ch["as_of"], cash=ch["cash"],
+                    monthly_burn=data.get("monthly_burn") or 0.0,
+                    source_filing="EODHD quarterly balance sheet (SEDAR-sourced)"))
+                stats["cash_quarters_added"] += 1
+        have_sh = {s.as_of for s in db.execute(select(models.SharesHistory).where(
+            models.SharesHistory.company_id == c.id)).scalars()}
+        for sh in data["shares_history"]:
+            if sh["as_of"] not in have_sh:
+                db.add(models.SharesHistory(company_id=c.id, as_of=sh["as_of"],
+                                            shares=sh["shares"]))
+                stats["shares_quarters_added"] += 1
+        db.commit()
+    from .jobs.nightly import run_grades
+    run_grades(db)
+    return stats
