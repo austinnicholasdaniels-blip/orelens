@@ -25,6 +25,7 @@ function TickerInner({ params }: { params: { symbol: string } }) {
   if (!data) return <p className="text-ash">Loading core samples…</p>;
 
   const { company, prices, grade, capital, warrants, program, drill_results, comparison } = data;
+  const ds = data.dilution_stats ?? {};
   const financings = data.financings ?? [];
   const promotions = data.promotions ?? [];
   const activePromo = promotions.find((p: any) => p.active);
@@ -64,6 +65,44 @@ function TickerInner({ params }: { params: { symbol: string } }) {
             <dt className="text-ash">Monthly Burn</dt><dd className="font-mono text-right">{fmt.money(capital.monthly_burn)}</dd>
             <dt className="text-ash">Theoretical Cash from Warrants</dt><dd className="font-mono text-right text-oxide">{fmt.money(capital.theoretical_warrant_cash)}</dd>
           </dl>
+        </div>
+
+        <div className="bg-tray border border-seam rounded-sm p-4">
+          <p className="text-xs uppercase tracking-widest text-ash mb-3">Dilution Profile</p>
+          <dl className="grid grid-cols-2 gap-y-3 text-sm">
+            <dt className="text-ash">Share Growth (1y)</dt>
+            <dd className={`font-mono text-right ${(ds.shares_growth_1y_pct ?? 0) > 10 ? "text-hazard" : ""}`}>
+              {ds.shares_growth_1y_pct != null ? `+${ds.shares_growth_1y_pct}%` : "\u2014"}</dd>
+            <dt className="text-ash">Share Growth (3y)</dt>
+            <dd className={`font-mono text-right ${(ds.shares_growth_3y_pct ?? 0) > 30 ? "text-hazard" : ""}`}>
+              {ds.shares_growth_3y_pct != null ? `+${ds.shares_growth_3y_pct}%` : "\u2014"}</dd>
+            <dt className="text-ash">Ownership Drag (3y)</dt>
+            <dd className="font-mono text-right text-hazard">
+              {ds.ownership_drag_3y_pct != null ? `\u2212${ds.ownership_drag_3y_pct}%` : "\u2014"}</dd>
+            <dt className="text-ash">Est. Capital Raised (3y)</dt>
+            <dd className="font-mono text-right">
+              {ds.est_capital_raised_3y_m != null ? `$${ds.est_capital_raised_3y_m}M` : "\u2014"}</dd>
+            <dt className="text-ash">Runway</dt>
+            <dd className="font-mono text-right">
+              {ds.adjusted_runway_m != null
+                ? `${ds.adjusted_runway_m} mo (incl. $${ds.raised_since_snapshot_m}M raised)`
+                : ds.runway_m != null ? `${ds.runway_m} mo` : "\u2014"}</dd>
+          </dl>
+          {(ds.raise_events_3y ?? []).length > 0 && (
+            <div className="mt-3 pt-3 border-t border-seam">
+              <p className="text-xs uppercase tracking-widest text-ash mb-2">Issuance Events (3y)</p>
+              {ds.raise_events_3y.map((e: any, i: number) => (
+                <div key={i} className="flex items-baseline gap-3 text-xs py-1">
+                  <span className="font-mono text-ash">{e.date}</span>
+                  <span className="text-hazard">+{e.pct}%</span>
+                  <span className="text-ash">{e.shares_added_m}M shares</span>
+                  {e.est_raised_m != null && (
+                    <span className="ml-auto font-mono">~${e.est_raised_m}M</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {activePromo && (
