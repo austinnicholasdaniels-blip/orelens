@@ -10,6 +10,10 @@ type Row = Record<string, any>;
 const TABS = [
   { id: "all-stocks", label: "All Stocks" },
   { id: "value-momentum", label: "Best Bang-for-Buck" },
+  { id: "bullish-setups", label: "Bullish Setups" },
+  { id: "dilution-risk", label: "Dilution Risk" },
+  { id: "burn-league", label: "Burn League" },
+  { id: "serial-raisers", label: "Serial Raisers" },
   { id: "most-dilutive", label: "Most Dilutive" },
   { id: "coiled-springs", label: "Coiled Springs" },
   { id: "unlock-calendar", label: "Unlock Calendar" },
@@ -32,6 +36,30 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
     { key: "ticker", label: "Ticker" }, { key: "score", label: "Score" },
     { key: "ev_per_oz", label: "EV/oz" }, { key: "factors", label: "Factors" },
     { key: "runway_m", label: "Runway (mo)" }, { key: "grade", label: "Grade" },
+  ],
+  "bullish-setups": [
+    { key: "ticker", label: "Ticker" }, { key: "price", label: "Price" },
+    { key: "score", label: "Score" }, { key: "ret_60d_pct", label: "60d %" },
+    { key: "off_high_pct", label: "Off High %" }, { key: "runway_m", label: "Runway (mo)" },
+    { key: "why", label: "Setup" }, { key: "grade", label: "Grade" },
+  ],
+  "dilution-risk": [
+    { key: "ticker", label: "Ticker" }, { key: "probability", label: "Raise Probability" },
+    { key: "score", label: "Score" }, { key: "runway_m", label: "Runway (mo)" },
+    { key: "cash_m", label: "Cash ($M)" }, { key: "raises_3y", label: "Raises 3y" },
+    { key: "why", label: "Signals" }, { key: "grade", label: "Grade" },
+  ],
+  "burn-league": [
+    { key: "ticker", label: "Ticker" }, { key: "name", label: "Company" },
+    { key: "monthly_burn", label: "Burn/mo ($)" }, { key: "cash_m", label: "Cash ($M)" },
+    { key: "runway_m", label: "Runway (mo)" }, { key: "as_of", label: "As Of" },
+    { key: "grade", label: "Grade" },
+  ],
+  "serial-raisers": [
+    { key: "ticker", label: "Ticker" }, { key: "raises_3y", label: "Raises 3y" },
+    { key: "raises_per_year", label: "Per Year" }, { key: "last_raise", label: "Last Raise" },
+    { key: "last_raise_pct", label: "Last Size %" }, { key: "shares_growth_pct", label: "Total Growth %" },
+    { key: "grade", label: "Grade" },
   ],
   "most-dilutive": [
     { key: "ticker", label: "Ticker" }, { key: "qoq_pct", label: "Shares Added QoQ %" },
@@ -78,6 +106,10 @@ const DESCRIPTIONS: Record<string, string> = {
 };
 
 const EMPTY: Record<string, string> = {
+  "bullish-setups": "No setups clearing the bar: uptrend, volume, runway, and clean structure all have to line up. These are rare on purpose.",
+  "dilution-risk": "No elevated raise-probability names right now. Scores build from runway, cash trend, and issuance habits.",
+  "burn-league": "Burn data loads from quarterly cash-flow statements - populates after the deep-history backfill.",
+  "serial-raisers": "Needs multi-quarter share history - populates after the deep-history backfill.",
   "stock-promotions": "No disclosed investor-awareness or IR engagements found in the last 5 months. Run POST /api/admin/backfill-promotions to scan, or wait for the nightly wire sync.",
   "unlock-calendar": "No tracked financings approaching their 4-month hold expiry. This fills automatically as placement closings cross the wire.",
   "most-dilutive": "No companies with a quarter-over-quarter share increase in the tracked window.",
