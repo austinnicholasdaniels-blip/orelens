@@ -1576,3 +1576,223 @@ async def backfill_deep_history(years: int = 5, db: Session = Depends(get_db)):
     from .jobs.nightly import run_grades
     run_grades(db)
     return stats
+
+
+# ============================ DILUTION INTELLIGENCE SCANNERS (EODHD-era) ====
+def _latest_fin(db, cid):
+    return db.execute(select(models.FinancialSnapshot).where(
+        models.FinancialSnapshot.company_id == cid)
+        .order_by(_desc(models.FinancialSnapshot.as_of)).limit(1)).scalar_one_or_none()
+
+
+def _px_series(db, cid, days=400):
+    from datetime import timedelta as _td
+    cutoff = date.today() - _td(days=days)
+    return db.execute(select(models.DailyPrice).where(
+        models.DailyPrice.company_id == cid,
+        models.DailyPrice.day >= cutoff)
+        .order_by(models.DailyPrice.day)).scalars().all()
+
+
+def _grade_of(db, cid):
+    g = db.execute(select(models.DilutionGrade).where(
+        models.DilutionGrade.company_id == cid)
+        .order_by(_desc(models.DilutionGrade.day)).limit(1)).scalar_one_or_none()
+    return g.grade if g else None
+
+
+def _shares_hist(db, cid):
+    return db.execute(select(models.SharesHistory).where(
+        models.SharesHistory.company_id == cid)
+        .order_by(models.SharesHistory.as_of)).scalars().all()
+
+
+def _raise_events(hist, years=3):
+    """Quarters where shares outstanding jumped >=2% = an issuance event."""
+    from datetime import timedelta as _td
+    cutoff = date.today() - _td(days=int(years * 365.25))
+    events = []
+    for prev, cur in zip(hist, hist[1:]):
+        if cur.as_of < cutoff or not prev.shares:
+            continue
+        pct = 100 * (cur.shares - prev.shares) / prev.shares
+        if pct >= 2.0:
+            events.append({"date": cur.as_of, "pct": round(pct, 1),
+                           "shares_added": cur.shares - prev.shares})
+    return events
+
+
+@router.get("/api/scanners/dilution-risk")
+def dilution_risk(commodity: str | None = None, tier: str | None = None,
+                  db: Session = Depends(get_db)):
+    """Highest probability of a dilutive raise: short runway, shrinking cash,
+    habitual issuance, and a beaten-down price all push the score up."""
+    out = []
+    for c in db.execute(select(models.Company)).scalars():
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        fin = _latest_fin(db, c.id)
+        if not fin or not fin.cash:
+            continue
+        score, why = 0, []
+        runway = (fin.cash / fin.monthly_burn) if fin.monthly_burn else None
+        if runway is not None:
+            if runway <= 3:
+                score += 40; why.append(f"{runway:.0f}mo runway")
+            elif runway <= 6:
+                score += 30; why.append(f"{runway:.0f}mo runway")
+            elif runway <= 12:
+                score += 15; why.append(f"{runway:.0f}mo runway")
+        hist = _shares_hist(db, c.id)
+        events = _raise_events(hist, years=3)
+        if len(events) >= 5:
+            score += 25; why.append(f"{len(events)} raises in 3y")
+        elif len(events) >= 3:
+            score += 15; why.append(f"{len(events)} raises in 3y")
+        snaps = db.execute(select(models.FinancialSnapshot).where(
+            models.FinancialSnapshot.company_id == c.id)
+            .order_by(_desc(models.FinancialSnapshot.as_of)).limit(4)).scalars().all()
+        cash_seq = [s.cash for s in reversed(snaps) if s.cash is not None]
+        if len(cash_seq) >= 3 and all(b < a for a, b in zip(cash_seq, cash_seq[1:])):
+            score += 15; why.append("cash shrinking 3+ quarters")
+        px = _px_series(db, c.id, 370)
+        if px:
+            closes = [p.close for p in px]
+            lo, last = min(closes), closes[-1]
+            if lo and last <= lo * 1.20:
+                score += 10; why.append("near 52w low")
+        if score < 15:
+            continue
+        prob = ("VERY HIGH" if score >= 60 else "HIGH" if score >= 40
+                else "ELEVATED" if score >= 25 else "MODERATE")
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "score": score, "probability": prob,
+            "runway_m": runway and round(runway, 1),
+            "cash_m": round(fin.cash / 1e6, 1),
+            "raises_3y": len(events),
+            "why": " - ".join(why), "grade": _grade_of(db, c.id),
+        })
+    out.sort(key=lambda x: -x["score"])
+    return out
+
+
+@router.get("/api/scanners/burn-league")
+def burn_league(commodity: str | None = None, tier: str | None = None,
+                db: Session = Depends(get_db)):
+    """True burn, ranked: operating-cash-flow burn per month and the real
+    runway it implies. The shortest fuses at the top."""
+    out = []
+    for c in db.execute(select(models.Company)).scalars():
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        fin = _latest_fin(db, c.id)
+        if not fin or not fin.monthly_burn or not fin.cash:
+            continue
+        runway = fin.cash / fin.monthly_burn
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "monthly_burn": round(fin.monthly_burn, 0),
+            "cash_m": round(fin.cash / 1e6, 1),
+            "runway_m": round(runway, 1),
+            "as_of": fin.as_of.isoformat(),
+            "grade": _grade_of(db, c.id),
+        })
+    out.sort(key=lambda x: x["runway_m"])
+    return out
+
+
+@router.get("/api/scanners/serial-raisers")
+def serial_raisers(commodity: str | None = None, tier: str | None = None,
+                   db: Session = Depends(get_db)):
+    """Who taps the market like clockwork: share-issuance events (quarters
+    with a >=2% jump in shares out) over the last 3 years, from filings."""
+    out = []
+    for c in db.execute(select(models.Company)).scalars():
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        hist = _shares_hist(db, c.id)
+        if len(hist) < 4:
+            continue
+        events = _raise_events(hist, years=3)
+        if not events:
+            continue
+        first, last = hist[0], hist[-1]
+        total_growth = (100 * (last.shares - first.shares) / first.shares
+                        if first.shares else None)
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "raises_3y": len(events),
+            "raises_per_year": round(len(events) / 3.0, 1),
+            "last_raise": events[-1]["date"].isoformat(),
+            "last_raise_pct": events[-1]["pct"],
+            "shares_growth_pct": total_growth and round(total_growth, 0),
+            "grade": _grade_of(db, c.id),
+        })
+    out.sort(key=lambda x: (-x["raises_3y"], x["ticker"]))
+    return out
+
+
+@router.get("/api/scanners/bullish-setups")
+def bullish_setups(commodity: str | None = None, tier: str | None = None,
+                   db: Session = Depends(get_db)):
+    """Strength with a clean structure: uptrend (price > 50d > 200d), volume
+    building, near the 52-week high, a year-plus of runway so no raise looms,
+    and minimal trailing dilution."""
+    out = []
+    for c in db.execute(select(models.Company)).scalars():
+        if (commodity and c.commodity != commodity) or \
+           (tier and c.jurisdiction_tier != tier):
+            continue
+        px = _px_series(db, c.id, 400)
+        if len(px) < 60:
+            continue
+        closes = [p.close for p in px]
+        vols = [p.volume or 0 for p in px]
+        last = closes[-1]
+        ma50 = sum(closes[-50:]) / 50
+        ma200 = sum(closes[-200:]) / 200 if len(closes) >= 200 else None
+        hi52 = max(closes)
+        v20 = sum(vols[-20:]) / 20
+        v60 = sum(vols[-60:]) / 60 if len(vols) >= 60 else v20
+        ret60 = (100 * (last - closes[-60]) / closes[-60]
+                 if len(closes) >= 60 and closes[-60] else 0)
+        score, why = 0, []
+        if last > ma50:
+            score += 20; why.append("above 50d")
+        if ma200 and ma50 > ma200:
+            score += 15; why.append("50d > 200d")
+        if hi52 and last >= hi52 * 0.80:
+            score += 20; why.append("within 20% of 52w high")
+        if v60 and v20 > v60 * 1.15:
+            score += 15; why.append("volume building")
+        if ret60 > 15:
+            score += 10; why.append(f"+{ret60:.0f}% in 60d")
+        fin = _latest_fin(db, c.id)
+        runway = (fin.cash / fin.monthly_burn
+                  if fin and fin.cash and fin.monthly_burn else None)
+        if runway and runway >= 12:
+            score += 15; why.append(f"{runway:.0f}mo runway")
+        hist = _shares_hist(db, c.id)
+        events_1y = [e for e in _raise_events(hist, years=1)]
+        if not events_1y:
+            score += 5; why.append("no dilution 12mo")
+        if score < 55:
+            continue
+        out.append({
+            "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
+            "price": round(last, 2), "score": score,
+            "ret_60d_pct": round(ret60, 1),
+            "off_high_pct": hi52 and round(100 * (hi52 - last) / hi52, 1),
+            "runway_m": runway and round(runway, 1),
+            "why": " - ".join(why), "grade": _grade_of(db, c.id),
+        })
+    out.sort(key=lambda x: -x["score"])
+    return out
