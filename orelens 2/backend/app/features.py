@@ -1363,3 +1363,31 @@ def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
         "news_items_14d": len(news),
         "news_sample": [n["headline"][:80] for n in news[:3]],
     }
+
+
+@router.post("/api/admin/eodhd-debug")
+def eodhd_debug(ticker: str = "VZLA", exchange: str = "TSXV"):
+    """Raw status + body snippets for the eod and news endpoints."""
+    import httpx as _hx
+    from .config import settings as _s
+    from .services.eodhd import _sym, BASE
+    from datetime import date as _d, timedelta as _td
+    sym = _sym(ticker, exchange)
+    out = {"symbol": sym}
+    for name, path, params in [
+        ("eod", f"eod/{sym}", {"from": (_d.today() - _td(days=60)).isoformat(),
+                               "period": "d"}),
+        ("eod_noperiod", f"eod/{sym}", {"from": (_d.today() - _td(days=60)).isoformat()}),
+        ("news", "news", {"s": sym, "limit": 10,
+                          "from": (_d.today() - _td(days=30)).isoformat()}),
+    ]:
+        p = dict(params); p["api_token"] = _s.eodhd_api_key; p["fmt"] = "json"
+        try:
+            r = _hx.get(f"{BASE}/{path}", params=p, timeout=30,
+                        follow_redirects=True)
+            body = r.text[:300]
+            out[name] = {"status": r.status_code, "body_start": body,
+                         "is_list": body.strip().startswith("[")}
+        except Exception as exc:  # noqa: BLE001
+            out[name] = {"exception": str(exc)[:200]}
+    return out
