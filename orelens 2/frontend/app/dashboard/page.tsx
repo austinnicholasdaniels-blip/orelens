@@ -52,6 +52,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
   "burn-league": [
     { key: "ticker", label: "Ticker" }, { key: "name", label: "Company" },
     { key: "monthly_burn", label: "Burn/mo ($)" }, { key: "cash_m", label: "Cash ($M)" },
+    { key: "raised_since_m", label: "Raised Since ($M)" },
     { key: "runway_m", label: "Runway (mo)" }, { key: "as_of", label: "As Of" },
     { key: "grade", label: "Grade" },
   ],
