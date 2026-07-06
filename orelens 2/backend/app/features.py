@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from . import models
+from .services import marketdata
 from .services import marketdata as yahoo
 
 log = logging.getLogger("orelens.features")
@@ -1371,6 +1372,128 @@ def eodhd_debug(ticker: str = "VZLA"):
         except Exception as exc:  # noqa: BLE001
             out[name] = {"error": str(exc)[:200]}
     return out
+
+
+# ------------------------------------------------- EODHD engine self-test
+@router.post("/api/admin/eodhd-selftest")
+def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
+    """Validate the EODHD engine against a real symbol from this server."""
+    from .config import settings as _s
+    if not _s.eodhd_api_key:
+        return {"key_present": False,
+                "fix": "Add EODHD_API_KEY in Render -> orelens-api -> Environment"}
+    from .services import eodhd as _e
+    d = _e.fetch_company_data(ticker, exchange, "6mo")
+    news = _e.fetch_news(ticker, exchange, days=14)
+    return {
+        "key_present": True, "symbol": _e._symbol(ticker, exchange),
+        "price_days": len(d["prices"]),
+        "latest_price_day": d["prices"][-1]["date"].isoformat() if d["prices"] else None,
+        "shares_outstanding": d["shares_outstanding"],
+        "cash_latest": d["cash"], "monthly_burn": d["monthly_burn"],
+        "cash_quarters": len(d["cash_history"]),
+        "shares_quarters": len(d["shares_history"]),
+        "financing_cf_quarters": len(d["financing_cf_history"]),
+        "sector": d["sector"], "industry": d["industry"],
+        "news_items_14d": len(news),
+        "news_sample": [n["headline"][:80] for n in news[:3]],
+    }
+
+
+# ---------------------------------------------- EODHD deep-history backfill
+_DEEP_STATUS: dict = {"state": "idle"}
+
+
+def _run_deep_backfill(years: int) -> None:
+    """Background worker: multi-year prices + full quarterly record for every
+    company, exchange self-heal persisted, then a re-grade."""
+    from .db import SessionLocal
+    from .jobs.nightly import run_grades
+    db = SessionLocal()
+    stats = {"state": "running", "companies_done": 0, "companies_total": 0,
+             "price_rows_added": 0, "cash_quarters_added": 0,
+             "shares_quarters_added": 0, "exchanges_fixed": [],
+             "commodities_filled": 0, "no_data": []}
+    _DEEP_STATUS.clear(); _DEEP_STATUS.update(stats)
+    try:
+        period = f"{min(years, 10)}y"
+        companies = db.execute(select(models.Company)).scalars().all()
+        stats["companies_total"] = len(companies)
+        for c in companies:
+            try:
+                data = marketdata.fetch_company_data(c.ticker, c.exchange, period)
+            except Exception:  # noqa: BLE001
+                stats["no_data"].append(c.ticker)
+                continue
+            if not data["prices"]:
+                stats["no_data"].append(c.ticker)
+                stats["companies_done"] += 1
+                _DEEP_STATUS.update(stats)
+                continue
+            if data.get("resolved_exchange") and data["resolved_exchange"] != c.exchange:
+                stats["exchanges_fixed"].append(
+                    f"{c.ticker}: {c.exchange} -> {data['resolved_exchange']}")
+                c.exchange = data["resolved_exchange"]
+            if data.get("shares_outstanding"):
+                c.shares_outstanding = data["shares_outstanding"]
+            if c.commodity in (None, "", "Unclassified") and data.get("industry"):
+                c.commodity = (data["industry"] or "")[:40] or c.commodity
+                stats["commodities_filled"] += 1
+            have_days = {p.day for p in db.execute(select(models.DailyPrice).where(
+                models.DailyPrice.company_id == c.id)).scalars()}
+            for row in data["prices"]:
+                if row["date"] not in have_days:
+                    db.add(models.DailyPrice(company_id=c.id, day=row["date"],
+                                             close=row["close"], volume=row["volume"]))
+                    stats["price_rows_added"] += 1
+            have_fs = {s.as_of for s in db.execute(select(models.FinancialSnapshot).where(
+                models.FinancialSnapshot.company_id == c.id)).scalars()}
+            for ch in data["cash_history"]:
+                if ch["as_of"] not in have_fs:
+                    db.add(models.FinancialSnapshot(
+                        company_id=c.id, as_of=ch["as_of"], cash=ch["cash"],
+                        monthly_burn=data.get("monthly_burn") or 0.0,
+                        source_filing="EODHD quarterly balance sheet (SEDAR-sourced)"))
+                    stats["cash_quarters_added"] += 1
+            have_sh = {s.as_of for s in db.execute(select(models.SharesHistory).where(
+                models.SharesHistory.company_id == c.id)).scalars()}
+            for sh in data["shares_history"]:
+                if sh["as_of"] not in have_sh:
+                    db.add(models.SharesHistory(company_id=c.id, as_of=sh["as_of"],
+                                                shares=sh["shares"]))
+                    stats["shares_quarters_added"] += 1
+            db.commit()
+            stats["companies_done"] += 1
+            _DEEP_STATUS.update(stats)
+        run_grades(db)
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        stats["state"] = "error"
+        stats["error"] = str(exc)[:300]
+        db.rollback()
+    finally:
+        db.close()
+        _DEEP_STATUS.update(stats)
+
+
+@router.post("/api/admin/backfill-deep-history")
+def backfill_deep_history(years: int = 5):
+    """Kick off the deep-history upgrade in the background (it runs for
+    several minutes) and return immediately. Poll backfill-deep-status."""
+    import threading
+    if _DEEP_STATUS.get("state") == "running":
+        return {"started": False, "reason": "already running",
+                "progress": _DEEP_STATUS}
+    threading.Thread(target=_run_deep_backfill, args=(years,),
+                     daemon=True).start()
+    return {"started": True, "years": years,
+            "check_progress": "GET /api/admin/backfill-deep-status"}
+
+
+@router.get("/api/admin/backfill-deep-status")
+def backfill_deep_status():
+    return _DEEP_STATUS
+
 
 
 # ------------------------------------------------- EODHD engine self-test
