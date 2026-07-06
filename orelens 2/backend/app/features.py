@@ -1338,61 +1338,6 @@ def beta_signups(db: Session = Depends(get_db)):
          "signed_up": r.created.isoformat()} for r in rows]}
 
 
-# ------------------------------------------------- EODHD engine selftest
-@router.post("/api/admin/eodhd-selftest")
-def eodhd_selftest(ticker: str = "VZLA", exchange: str = "TSXV"):
-    """Validate the EODHD engine against a real symbol from this server
-    (where the key and network live). Reports coverage per dataset."""
-    from .config import settings as _s
-    if not _s.eodhd_api_key:
-        return {"key_present": False,
-                "fix": "Add EODHD_API_KEY in Render -> orelens-api -> Environment"}
-    from .services import eodhd as _e
-    d = _e.fetch_company_data(ticker, exchange, "6mo")
-    news = _e.fetch_news(ticker, exchange, days=14)
-    return {
-        "key_present": True, "symbol": _e._symbol(ticker, exchange),
-        "price_days": len(d["prices"]),
-        "latest_price_day": d["prices"][-1]["date"].isoformat() if d["prices"] else None,
-        "shares_outstanding": d["shares_outstanding"],
-        "cash_latest": d["cash"], "monthly_burn": d["monthly_burn"],
-        "cash_quarters": len(d["cash_history"]),
-        "shares_quarters": len(d["shares_history"]),
-        "financing_cf_quarters": len(d["financing_cf_history"]),
-        "sector": d["sector"], "industry": d["industry"],
-        "news_items_14d": len(news),
-        "news_sample": [n["headline"][:80] for n in news[:3]],
-    }
-
-
-@router.post("/api/admin/eodhd-debug")
-def eodhd_debug(ticker: str = "VZLA", exchange: str = "TSXV"):
-    """Raw status + body snippets for the eod and news endpoints."""
-    import httpx as _hx
-    from .config import settings as _s
-    from .services.eodhd import _sym, BASE
-    from datetime import date as _d, timedelta as _td
-    sym = _sym(ticker, exchange)
-    out = {"symbol": sym}
-    for name, path, params in [
-        ("eod", f"eod/{sym}", {"from": (_d.today() - _td(days=60)).isoformat(),
-                               "period": "d"}),
-        ("eod_noperiod", f"eod/{sym}", {"from": (_d.today() - _td(days=60)).isoformat()}),
-        ("news", "news", {"s": sym, "limit": 10,
-                          "from": (_d.today() - _td(days=30)).isoformat()}),
-    ]:
-        p = dict(params); p["api_token"] = _s.eodhd_api_key; p["fmt"] = "json"
-        try:
-            r = _hx.get(f"{BASE}/{path}", params=p, timeout=30,
-                        follow_redirects=True)
-            body = r.text[:300]
-            out[name] = {"status": r.status_code, "body_start": body,
-                         "is_list": body.strip().startswith("[")}
-        except Exception as exc:  # noqa: BLE001
-            out[name] = {"exception": str(exc)[:200]}
-    return out
-
-
 # ------------------------------------------- EODHD raw-response debug probe
 @router.post("/api/admin/eodhd-debug")
 def eodhd_debug(ticker: str = "VZLA"):
