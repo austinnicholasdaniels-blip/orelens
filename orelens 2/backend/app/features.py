@@ -58,9 +58,7 @@ async def add_ticker(body: AddTickerBody, db: Session = Depends(get_db)):
         db.add(c)
         db.flush()
 
-    data = await run_in_threadpool(marketdata.fetch_company_data, tick, c.exchange, "5y")
-    if data.get("resolved_exchange") and data["resolved_exchange"] != c.exchange:
-        c.exchange = data["resolved_exchange"]
+    data = await run_in_threadpool(marketdata.fetch_company_data, tick, c.exchange)
     if not data["prices"] and c.exchange in ("TSX", "TSXV"):
         alt = "TSX" if c.exchange == "TSXV" else "TSXV"
         alt_data = await run_in_threadpool(marketdata.fetch_company_data, tick, alt)
@@ -730,7 +728,7 @@ def clean_misattributed(db: Session = Depends(get_db)):
 
 # --------------------------------- market-wide promotion sweep (all of TSXV)
 ISSUER_PAT_SRC = (r"([A-Z][A-Za-z0-9&.\-' ]{2,60}?)\s*"
-                  r"\(\s*(TSXV|TSX-V|TSX VENTURE|TSX)\s*[:\s]\s*([A-Z]{1,6})(?:\.[A-Z])?\s*[\)|,]")
+                  r"\(\s*(TSXV|TSX-V|TSX VENTURE|TSX|CSE|CNSX|NEO)\s*[:\s]\s*([A-Z]{1,6})(?:\.[A-Z])?\s*[\)|,]")
 
 MARKET_PROMO_QUERIES = [
     '"investor awareness" "TSXV"',
@@ -2318,3 +2316,126 @@ def detect_drilling_from_news(days: int = 120, db: Session = Depends(get_db)):
             stats["intercepts_added"] += 1
     db.commit()
     return stats
+
+
+# ------------------------------------------- manual promotion URL ingestion
+class PromoUrlsBody(BaseModel):
+    urls: list[str]
+
+
+_URLINGEST_STATUS: dict = {"state": "idle"}
+
+
+def _run_url_ingest(urls: list[str]) -> None:
+    import re as _re
+    import httpx as _hx
+    from datetime import datetime as _dt
+    from .db import SessionLocal
+    from .services import promotion as _promo
+    from .services import financing as _finmod
+    from .jobs.nightly import _upsert_promotion, _upsert_financing
+    db = SessionLocal()
+    issuer_pat = _re.compile(ISSUER_PAT_SRC)
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")}
+    stats = {"state": "running", "done": 0, "total": len(urls),
+             "filed": [], "skipped": [], "companies_added": []}
+    _URLINGEST_STATUS.clear(); _URLINGEST_STATUS.update(stats)
+    try:
+        companies = db.execute(select(models.Company)).scalars().all()
+        by_ticker = {c.ticker: c for c in companies}
+        cores = [(c, _core_name(c.name)) for c in companies]
+        with _hx.Client(timeout=30, headers=ua, follow_redirects=True) as client:
+            for url in urls:
+                tail = url.rstrip("/").split("/")[-1][:60]
+                try:
+                    text = _promo.html_to_text(client.get(url).text)[:80_000]
+                except Exception as exc:  # noqa: BLE001
+                    stats["skipped"].append(f"{tail}: fetch failed ({str(exc)[:60]})")
+                    stats["done"] += 1; _URLINGEST_STATUS.update(stats)
+                    continue
+                low = text.lower()
+                head = text[:8000]
+                # issuer: exchange parenthetical first, then known-name match
+                c = None
+                m = issuer_pat.search(head)
+                if m and m.group(3).upper() in by_ticker:
+                    c = by_ticker[m.group(3).upper()]
+                if c is None:
+                    for cand, core in cores:
+                        if core and core in low[:4000]:
+                            c = cand
+                            break
+                if c is None and m:
+                    name = m.group(1).strip(" ,.")
+                    name = _re.split(r"\s[\-\u2013\u2014]{1,2}\s|--|\)\s", name)[-1].strip(" ,.-")
+                    ticker = m.group(3).upper()
+                    exch_raw = m.group(2).upper()
+                    exchange = ("CSE" if "CSE" in exch_raw or "CNSX" in exch_raw
+                                else "TSXV" if "V" in exch_raw.replace("TSX", "")
+                                or "VENTURE" in exch_raw else "TSX")
+                    if len(name) >= 4 and any(h in low for h in MINING_HINTS):
+                        c = models.Company(ticker=ticker, exchange=exchange,
+                                           name=name, commodity="Unclassified",
+                                           jurisdiction="", jurisdiction_tier="Tier 1",
+                                           project_name="", shares_outstanding=0)
+                        db.add(c); db.flush()
+                        by_ticker[ticker] = c
+                        cores.append((c, _core_name(name)))
+                        stats["companies_added"].append(f"{ticker} ({name})")
+                if c is None:
+                    stats["skipped"].append(f"{tail}: issuer not identified")
+                    stats["done"] += 1; _URLINGEST_STATUS.update(stats)
+                    continue
+                parsed = _promo.parse_promotion(text[:20_000])
+                if not parsed:
+                    stats["skipped"].append(f"{tail}: no promotion language parsed")
+                    stats["done"] += 1; _URLINGEST_STATUS.update(stats)
+                    continue
+                headline = text.strip().split("\n")[0][:400] or tail
+                _upsert_promotion(db, c.id, _dt.utcnow(), headline, url[:400], parsed)
+                db.commit()
+                amt = parsed.get("amount")
+                stats["filed"].append(
+                    f"{c.ticker}: {parsed.get('firm') or 'firm?'} "
+                    f"{'$' + format(amt, ',.0f') if amt else '(no $ parsed)'}")
+                # financings ride along when the release mentions one
+                fpar = _finmod.parse_financing(text[:20_000])
+                if fpar:
+                    _upsert_financing(db, c.id, _dt.utcnow(), headline, url[:400], fpar)
+                    db.commit()
+                stats["done"] += 1
+                _URLINGEST_STATUS.update(stats)
+        stats["state"] = "done"
+        stats["promotions_total"] = len(
+            db.execute(select(models.Promotion)).scalars().all())
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _URLINGEST_STATUS.update(stats)
+
+
+@router.post("/api/admin/ingest-promotion-urls")
+def ingest_promotion_urls(body: PromoUrlsBody):
+    """Feed a list of release URLs; each is fetched, parsed for promotion
+    terms, attributed to its issuer (auto-adding unknown miners), and filed.
+    Background; poll ingest-promotion-urls-status for the per-URL report."""
+    import threading
+    if _URLINGEST_STATUS.get("state") == "running":
+        return {"started": False, "progress": _URLINGEST_STATUS}
+    urls = [u.strip() for u in body.urls if u.strip()]
+    seen, deduped = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u); deduped.append(u)
+    threading.Thread(target=_run_url_ingest, args=(deduped,),
+                     daemon=True).start()
+    return {"started": True, "urls": len(deduped),
+            "check_progress": "GET /api/admin/ingest-promotion-urls-status"}
+
+
+@router.get("/api/admin/ingest-promotion-urls-status")
+def ingest_promotion_urls_status():
+    return _URLINGEST_STATUS
