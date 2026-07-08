@@ -26,7 +26,7 @@ MONTHLY_PAT = re.compile(
     r"|(?:C|US)?\$\s*([\d,]+(?:\.\d+)?)\s*per month", re.I)
 TOTAL_PAT = re.compile(
     r"(?:aggregate|total(?: consideration| fee| cost)? of|budget of|consideration of|cash fee of|compensation of|fees? of)\s*(?:up to\s*)?"
-    r"(?:C|US)?\$\s*([\d,]+(?:\.\d+)?)\s*(million|M\b)?", re.I)
+    r"(?:(?:C|US)?\$|EUR\s*|\u20ac\s*)\s*([\d,]+(?:\.\d+)?)\s*(million|M\b)?", re.I)
 WEEKS_PAT = re.compile(
     r"(?:term of|period of|for|\ba)\s+(?:approximately\s+)?"
     r"(one|two|three|four|five|six|eight|ten|twelve|\d{1,2})\s*(?:\(\d+\))?[\s-]*weeks?", re.I)
