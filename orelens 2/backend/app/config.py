@@ -16,8 +16,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""    # for MD&A / financial statement extraction
     eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
     admin_key: str = ""            # locks /api/admin/* when set (ADMIN_KEY env)
+    resend_api_key: str = ""       # enables digest email sending (RESEND_API_KEY)
+    digest_from: str = "OreLens <digest@orelens.com>"
     eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
     admin_key: str = ""            # locks /api/admin/* when set (ADMIN_KEY env)
+    resend_api_key: str = ""       # enables digest email sending (RESEND_API_KEY)
+    digest_from: str = "OreLens <digest@orelens.com>"
     cost_per_meter_default: float = 250.0  # CAD, all-in diamond drilling default
     class Config:
         env_file = ".env"
