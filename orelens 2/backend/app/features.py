@@ -1627,6 +1627,50 @@ def _raise_events(hist, years=3):
 
 
 
+def _burn_runway(db, cid):
+    """Single source of truth for burn and runway. Burn priority:
+    (1) OCF-derived from the latest snapshot; (2) estimated from the cash
+    decline itself when OCF burn is missing/zero but the treasury is visibly
+    shrinking (zero-burn-with-falling-cash is a contradiction, not a fact).
+    Raise signals cover BOTH closed and merely announced financings."""
+    from datetime import timedelta as _td
+    snaps = db.execute(select(models.FinancialSnapshot).where(
+        models.FinancialSnapshot.company_id == cid)
+        .order_by(models.FinancialSnapshot.as_of)).scalars().all()
+    if not snaps:
+        return None
+    fin = snaps[-1]
+    burn, source = (fin.monthly_burn, "ocf") if fin.monthly_burn else (None, None)
+    if not burn:
+        declines = []
+        for a, b in zip(snaps[-8:], snaps[-8:][1:]):
+            if a.cash and b.cash and b.cash < a.cash:
+                q_days = max((b.as_of - a.as_of).days, 30)
+                declines.append((a.cash - b.cash) / (q_days / 30.4))
+        if len(declines) >= 2:
+            declines.sort()
+            burn = round(declines[len(declines) // 2], 0)
+            source = "cash-trend"
+    runway = (fin.cash / burn) if (fin.cash and burn) else None
+    closed_amt, closed_date, announced_amt, announced_date = 0.0, None, 0.0, None
+    cutoff = date.today() - _td(days=120)
+    for r in db.execute(select(models.Financing).where(
+            models.Financing.company_id == cid)).scalars():
+        if r.closed and r.close_date and r.close_date > fin.as_of:
+            closed_amt += (r.amount or 0)
+            closed_date = max(closed_date or r.close_date, r.close_date)
+        elif not r.closed and r.announced and r.announced >= cutoff:
+            announced_amt += (r.amount or 0)
+            announced_date = max(announced_date or r.announced, r.announced)
+    adj_cash = (fin.cash or 0) + closed_amt
+    adj_runway = (adj_cash / burn) if burn and adj_cash else runway
+    return {"fin": fin, "burn": burn, "burn_source": source,
+            "runway": runway, "closed_amt": closed_amt,
+            "closed_date": closed_date, "announced_amt": announced_amt,
+            "announced_date": announced_date,
+            "adj_cash": adj_cash, "adj_runway": adj_runway}
+
+
 def _raises_since(db, cid, since):
     """Closed financings with close_date after `since` - the money the
     quarterly snapshot doesn't know about yet (the PNPN problem)."""
@@ -1650,11 +1694,12 @@ def dilution_risk(commodity: str | None = None, tier: str | None = None,
         if (commodity and c.commodity != commodity) or \
            (tier and c.jurisdiction_tier != tier):
             continue
-        fin = _latest_fin(db, c.id)
-        if not fin or not fin.cash:
+        br = _burn_runway(db, c.id)
+        if not br or not br["fin"].cash:
             continue
+        fin = br["fin"]
         score, why = 0, []
-        runway = (fin.cash / fin.monthly_burn) if fin.monthly_burn else None
+        runway = br["runway"]
         if runway is not None:
             if runway <= 3:
                 score += 40; why.append(f"{runway:.0f}mo runway")
@@ -1680,25 +1725,32 @@ def dilution_risk(commodity: str | None = None, tier: str | None = None,
             lo, last = min(closes), closes[-1]
             if lo and last <= lo * 1.20:
                 score += 10; why.append("near 52w low")
-        # news-aware: a raise closed AFTER the cash snapshot means the
-        # treasury is fuller than the quarterly figure - probability drops
-        raised, raise_date, n_raises = _raises_since(db, c.id, fin.as_of)
-        adj_runway = runway
-        if raised and fin.monthly_burn:
-            adj_runway = (fin.cash + raised) / fin.monthly_burn
+        # news-aware, both flavors: a CLOSED raise refills the treasury;
+        # an ANNOUNCED raise means the dilution question is already answered.
+        adj_runway = br["adj_runway"]
+        label_override = None
+        if br["closed_amt"]:
             score = max(0, score - 35)
-            why.append(f"but raised ${raised/1e6:.1f}M on {raise_date} "
-                       f"(post-dates cash figure)")
+            why.append(f"but raised ${br['closed_amt']/1e6:.1f}M on "
+                       f"{br['closed_date']} (post-dates cash figure)")
+        if br["announced_amt"] or (br["announced_date"] and not br["announced_amt"]):
+            score = max(0, score - 35)
+            label_override = "RAISE ANNOUNCED"
+            amt_txt = (f"~${br['announced_amt']/1e6:.1f}M "
+                       if br["announced_amt"] else "")
+            why.append(f"raise {amt_txt}announced {br['announced_date']} - "
+                       "dilution already in motion")
         if score < 15:
             continue
-        prob = ("VERY HIGH" if score >= 60 else "HIGH" if score >= 40
-                else "ELEVATED" if score >= 25 else "MODERATE")
+        prob = label_override or ("VERY HIGH" if score >= 60 else
+                "HIGH" if score >= 40 else "ELEVATED" if score >= 25
+                else "MODERATE")
         out.append({
             "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
             "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
             "score": score, "probability": prob,
             "runway_m": adj_runway and round(adj_runway, 1),
-            "cash_m": round((fin.cash + (raised or 0)) / 1e6, 1),
+            "cash_m": round(br["adj_cash"] / 1e6, 1),
             "raises_3y": len(events),
             "why": " - ".join(why), "grade": _grade_of(db, c.id),
         })
@@ -1716,21 +1768,25 @@ def burn_league(commodity: str | None = None, tier: str | None = None,
         if (commodity and c.commodity != commodity) or \
            (tier and c.jurisdiction_tier != tier):
             continue
-        fin = _latest_fin(db, c.id)
-        if not fin or not fin.monthly_burn or not fin.cash:
+        br = _burn_runway(db, c.id)
+        if not br or not br["burn"] or not br["fin"].cash:
             continue
-        raised, raise_date, _n = _raises_since(db, c.id, fin.as_of)
-        adj_cash = fin.cash + (raised or 0)
-        runway = adj_cash / fin.monthly_burn
+        fin = br["fin"]
+        as_of = fin.as_of.isoformat()
+        if br["burn_source"] == "cash-trend":
+            as_of += " (burn est. from cash decline)"
+        if br["closed_amt"]:
+            as_of += f" + raise {br['closed_date']}"
+        if br["announced_amt"]:
+            as_of += f" | raise ANNOUNCED {br['announced_date']}"
         out.append({
             "ticker": c.ticker, "exchange": c.exchange, "name": c.name,
             "commodity": c.commodity, "jurisdiction_tier": c.jurisdiction_tier,
-            "monthly_burn": round(fin.monthly_burn, 0),
-            "cash_m": round(adj_cash / 1e6, 1),
-            "raised_since_m": raised and round(raised / 1e6, 1),
-            "runway_m": round(runway, 1),
-            "as_of": (f"{fin.as_of.isoformat()} + raise {raise_date}"
-                      if raised else fin.as_of.isoformat()),
+            "monthly_burn": round(br["burn"], 0),
+            "cash_m": round(br["adj_cash"] / 1e6, 1),
+            "raised_since_m": br["closed_amt"] and round(br["closed_amt"] / 1e6, 1),
+            "runway_m": round(br["adj_runway"], 1),
+            "as_of": as_of,
             "grade": _grade_of(db, c.id),
         })
     out.sort(key=lambda x: x["runway_m"])
@@ -2702,3 +2758,129 @@ def repair_promotion_links():
 @router.get("/api/admin/repair-promotion-links-status")
 def repair_promotion_links_status():
     return _LINKREPAIR_STATUS
+
+
+# ============================ CORRECTIVE TOOLING ============================
+class RecordFinancingBody(BaseModel):
+    ticker: str
+    amount: float
+    announced: str                    # YYYY-MM-DD
+    closed: bool = False
+    close_date: str | None = None
+    kind: str = "private placement"
+    headline: str = ""
+    source_url: str = ""
+
+
+@router.post("/api/admin/record-financing")
+def record_financing(body: RecordFinancingBody, db: Session = Depends(get_db)):
+    """Manual corrective entry: when detection misses a raise (announced or
+    closed), file it here and every scanner adjusts immediately."""
+    from datetime import datetime as _dt, timedelta as _td
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == body.ticker.upper().strip())).scalar_one_or_none()
+    if not c:
+        return {"error": f"{body.ticker} not tracked - add it first."}
+    ann = _dt.strptime(body.announced, "%Y-%m-%d").date()
+    cd = (_dt.strptime(body.close_date, "%Y-%m-%d").date()
+          if body.close_date else (ann if body.closed else None))
+    fin = models.Financing(
+        company_id=c.id, announced=ann, closed=body.closed, close_date=cd,
+        amount=body.amount, kind=body.kind[:60],
+        headline=(body.headline or f"{c.name} {body.kind} ${body.amount:,.0f} (manual entry)")[:400],
+        source_url=(body.source_url or "manual-entry")[:400],
+        hold_expiry=(cd + _td(days=122)) if cd else None)
+    db.add(fin); db.commit()
+    return {"filed": f"{c.ticker}: ${body.amount:,.0f} {body.kind}, "
+                     f"{'closed ' + str(cd) if body.closed else 'announced ' + str(ann)}",
+            "effect": "dilution-risk and burn-league adjust on next load"}
+
+
+@router.post("/api/admin/recheck-company")
+def recheck_company(ticker: str, db: Session = Depends(get_db)):
+    """Single-company corrective sweep: re-pull 30 days of licensed news for
+    one ticker, run financing + promotion detection, report what was found."""
+    from .config import settings as _s
+    from .services import eodhd as _e
+    from .services import financing as _finmod
+    from .services import promotion as _promo
+    from .jobs.nightly import _upsert_financing, _upsert_promotion
+    if not _s.eodhd_api_key:
+        return {"error": "EODHD_API_KEY not configured"}
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == ticker.upper().strip())).scalar_one_or_none()
+    if not c:
+        return {"error": f"{ticker} not tracked."}
+    items = _e.fetch_news(c.ticker, c.exchange, 30, 30)
+    core = _core_name(c.name)
+    found = {"news_scanned": len(items), "financings": [], "promotions": []}
+    for item in items:
+        text = f"{item['headline']} {item['summary']}"
+        if core not in text.lower():
+            continue
+        fpar = _finmod.parse_financing(text)
+        if fpar:
+            _upsert_financing(db, c.id, item["published"],
+                              item["headline"][:400], item["url"][:400], fpar)
+            found["financings"].append(item["headline"][:90])
+        ppar = _promo.parse_promotion(text)
+        if ppar:
+            _upsert_promotion(db, c.id, item["published"],
+                              item["headline"][:400], item["url"][:400], ppar)
+            found["promotions"].append(item["headline"][:90])
+    db.commit()
+    br = _burn_runway(db, c.id)
+    if br:
+        found["current_view"] = {
+            "burn": br["burn"], "burn_source": br["burn_source"],
+            "runway_m": br["runway"] and round(br["runway"], 1),
+            "adjusted_runway_m": br["adj_runway"] and round(br["adj_runway"], 1),
+            "closed_raise_since_snapshot": br["closed_amt"],
+            "announced_raise": br["announced_amt"] or br["announced_date"]}
+    return found
+
+
+@router.get("/api/admin/data-sentinel")
+def data_sentinel(db: Session = Depends(get_db)):
+    """The contradiction hunter: surfaces data that cannot all be true, so
+    mistakes get caught by the software before a user sees them."""
+    from datetime import datetime as _dt, timedelta as _td
+    report = {"zero_burn_falling_cash": [], "implausible_runway": [],
+              "stale_financials": [], "no_price_data": [],
+              "financings_missing_amount": [], "unattributed_promotions": []}
+    today = date.today()
+    for c in db.execute(select(models.Company)).scalars():
+        snaps = db.execute(select(models.FinancialSnapshot).where(
+            models.FinancialSnapshot.company_id == c.id)
+            .order_by(models.FinancialSnapshot.as_of)).scalars().all()
+        if snaps:
+            fin = snaps[-1]
+            falling = (len(snaps) >= 3 and all(
+                b.cash < a.cash for a, b in zip(snaps[-3:], snaps[-3:][1:])
+                if a.cash and b.cash))
+            if not fin.monthly_burn and falling:
+                report["zero_burn_falling_cash"].append(
+                    f"{c.ticker}: cash falling but burn recorded as 0")
+            br = _burn_runway(db, c.id)
+            if br and br["runway"] and br["runway"] > 120:
+                report["implausible_runway"].append(
+                    f"{c.ticker}: {br['runway']:.0f}mo runway "
+                    f"(burn source: {br['burn_source']})")
+            if (today - fin.as_of).days > 400:
+                report["stale_financials"].append(
+                    f"{c.ticker}: latest snapshot {fin.as_of}")
+        if not db.execute(select(models.DailyPrice).where(
+                models.DailyPrice.company_id == c.id).limit(1)).scalar_one_or_none():
+            report["no_price_data"].append(c.ticker)
+    for r in db.execute(select(models.Financing)).scalars():
+        if r.amount in (None, 0):
+            c = db.get(models.Company, r.company_id)
+            report["financings_missing_amount"].append(
+                f"{c.ticker if c else '?'}: {(r.headline or '')[:60]}")
+    for p in db.execute(select(models.Promotion)).scalars():
+        c = db.get(models.Company, p.company_id)
+        if c and not _title_mentions(c, p.headline or ""):
+            report["unattributed_promotions"].append(
+                f"{c.ticker}: '{(p.headline or '')[:60]}'")
+    report["summary"] = {k: len(v) for k, v in report.items() if isinstance(v, list)}
+    return report
