@@ -60,7 +60,10 @@ def _qdate(s: str):
         return None
 
 
-SIBLING = {"TSXV": "TSX", "TSX": "TSXV", "CSE": "TSXV"}
+# Canadian juniors migrate between boards: probe the whole chain.
+SIBLINGS = {"TSXV": ["TSX", "CSE", "NEO"], "TSX": ["TSXV", "CSE", "NEO"],
+            "CSE": ["TSXV", "TSX", "NEO"], "NEO": ["TSX", "TSXV", "CSE"]}
+SIBLING = {k: v[0] for k, v in SIBLINGS.items()}   # legacy alias
 
 
 def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
@@ -78,16 +81,17 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
     sym = _symbol(ticker, exchange)
     # self-heal: juniors graduate TSXV -> TSX (and vice versa). If the
     # requested board has no prices, probe the sibling and use it.
-    probe = _get(f"eod/{sym}", {"from": (date.today() - timedelta(days=30)).isoformat()})
-    if not (isinstance(probe, list) and probe) and exchange in SIBLING:
-        alt = SIBLING[exchange]
-        alt_sym = _symbol(ticker, alt)
-        alt_probe = _get(f"eod/{alt_sym}",
-                         {"from": (date.today() - timedelta(days=30)).isoformat()})
-        if isinstance(alt_probe, list) and alt_probe:
-            exchange, sym = alt, alt_sym
-            out["resolved_exchange"] = alt
-            log.info("EODHD self-heal: %s resolved to %s", ticker, alt_sym)
+    frm30 = (date.today() - timedelta(days=30)).isoformat()
+    probe = _get(f"eod/{sym}", {"from": frm30})
+    if not (isinstance(probe, list) and probe):
+        for alt in SIBLINGS.get(exchange, []):
+            alt_sym = _symbol(ticker, alt)
+            alt_probe = _get(f"eod/{alt_sym}", {"from": frm30})
+            if isinstance(alt_probe, list) and alt_probe:
+                exchange, sym = alt, alt_sym
+                out["resolved_exchange"] = alt
+                log.info("EODHD self-heal: %s resolved to %s", ticker, alt_sym)
+                break
 
     # ---- prices --------------------------------------------------------
     frm = (date.today() - timedelta(days=PERIOD_DAYS.get(period, 185))).isoformat()
@@ -166,8 +170,8 @@ def fetch_news(ticker: str, exchange: str, days: int = 5, limit: int = 25) -> li
     # fresh news under the US symbol) -> sibling Canadian board
     rows = None
     tried = []
-    for suf in [SUFFIX.get(exchange.upper(), ".V"), ".US",
-                SUFFIX.get(SIBLING.get(exchange.upper(), ""), None)]:
+    for suf in ([SUFFIX.get(exchange.upper(), ".V"), ".US"] +
+                [SUFFIX[s] for s in SIBLINGS.get(exchange.upper(), [])]):
         if not suf or suf in tried:
             continue
         tried.append(suf)
