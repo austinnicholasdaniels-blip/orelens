@@ -42,6 +42,36 @@ app = FastAPI(title="OreLens API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+
+# ------------------------- admin lock: protects leads + admin triggers -----
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from .config import settings as _settings
+
+
+@app.middleware("http")
+async def admin_guard(request: Request, call_next):
+    path = request.url.path
+    if (path.startswith("/api/admin") or path == "/api/jobs/nightly") \
+            and request.method != "OPTIONS":
+        if _settings.admin_key:
+            supplied = (request.headers.get("x-admin-key")
+                        or request.query_params.get("admin_key"))
+            if supplied != _settings.admin_key:
+                return JSONResponse(status_code=401, content={
+                    "error": "Admin endpoints are locked. Supply the key via "
+                             "the X-Admin-Key header or ?admin_key= parameter."})
+    return await call_next(request)
+
+
+@app.get("/api/security-status")
+def security_status():
+    return {"admin_endpoints_locked": bool(_settings.admin_key),
+            "note": ("LOCKED - key required for /api/admin/*"
+                     if _settings.admin_key else
+                     "UNLOCKED - set ADMIN_KEY in Render env to lock admin "
+                     "endpoints and the beta lead list before inviting users")}
+
 app.include_router(universe_module.router)
 app.include_router(features_module.router)
 
