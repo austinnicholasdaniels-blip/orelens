@@ -2362,8 +2362,10 @@ def _run_url_ingest(urls: list[str]) -> None:
                 if m and m.group(3).upper() in by_ticker:
                     c = by_ticker[m.group(3).upper()]
                 if c is None:
+                    zone = low[:1500]   # headline + dateline only, not sidebars
                     for cand, core in cores:
-                        if core and core in low[:4000]:
+                        if core and len(core) >= 5 and \
+                                _re.search(rf"\\b{_re.escape(core)}\\b", zone):
                             c = cand
                             break
                 if c is None and m:
@@ -2439,3 +2441,129 @@ def ingest_promotion_urls(body: PromoUrlsBody):
 @router.get("/api/admin/ingest-promotion-urls-status")
 def ingest_promotion_urls_status():
     return _URLINGEST_STATUS
+
+
+# --------------------------------------- promotion attribution verification
+_VERIFYPROMO_STATUS: dict = {"state": "idle"}
+
+
+def _run_verify_promotions() -> None:
+    import re as _re
+    import httpx as _hx
+    from .db import SessionLocal
+    from .services import promotion as _promo
+    db = SessionLocal()
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")}
+    stats = {"state": "running", "checked": 0, "total": 0,
+             "verified": 0, "deleted": [], "unreachable_kept": []}
+    _VERIFYPROMO_STATUS.clear(); _VERIFYPROMO_STATUS.update(stats)
+    try:
+        promos = db.execute(select(models.Promotion)).scalars().all()
+        stats["total"] = len(promos)
+        with _hx.Client(timeout=25, headers=ua, follow_redirects=True) as client:
+            for p in promos:
+                c = db.get(models.Company, p.company_id)
+                stats["checked"] += 1
+                if not c or not p.source_url:
+                    _VERIFYPROMO_STATUS.update(stats); continue
+                core = _core_name(c.name)
+                # headline check is free - if it names the company, verified
+                if _title_mentions(c, p.headline or ""):
+                    stats["verified"] += 1
+                    _VERIFYPROMO_STATUS.update(stats); continue
+                try:
+                    text = _promo.html_to_text(
+                        client.get(p.source_url).text)[:6000].lower()
+                except Exception:  # noqa: BLE001
+                    stats["unreachable_kept"].append(f"{c.ticker}: {p.source_url[:60]}")
+                    _VERIFYPROMO_STATUS.update(stats); continue
+                zone = text[:2500]
+                named = (len(core) >= 5 and
+                         _re.search(rf"\\b{_re.escape(core)}\\b", zone)) or \
+                        _re.search(rf"\\b{_re.escape(c.ticker.lower())}\\b", zone)
+                if named:
+                    stats["verified"] += 1
+                else:
+                    stats["deleted"].append(
+                        f"{c.ticker}: '{(p.headline or '')[:60]}' -> {p.source_url[:60]}")
+                    db.delete(p)
+                    db.commit()
+                _VERIFYPROMO_STATUS.update(stats)
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _VERIFYPROMO_STATUS.update(stats)
+
+
+@router.post("/api/admin/verify-promotions")
+def verify_promotions():
+    """Re-fetch every promotion's source page and delete records whose page
+    does not actually name the company they're filed under (the AYA class of
+    misattribution). Background; poll verify-promotions-status."""
+    import threading
+    if _VERIFYPROMO_STATUS.get("state") == "running":
+        return {"started": False, "progress": _VERIFYPROMO_STATUS}
+    threading.Thread(target=_run_verify_promotions, daemon=True).start()
+    return {"started": True,
+            "check_progress": "GET /api/admin/verify-promotions-status"}
+
+
+@router.get("/api/admin/verify-promotions-status")
+def verify_promotions_status():
+    return _VERIFYPROMO_STATUS
+
+
+# ----------------------------------------------- purge non-mining companies
+MINING_COMMODITIES = {
+    "gold", "silver", "copper", "nickel", "uranium", "lithium", "zinc",
+    "lead", "cobalt", "tin", "tungsten", "platinum", "palladium", "pge",
+    "rare earths", "iron ore", "coal", "potash", "phosphate", "diamonds",
+    "graphite", "manganese", "antimony", "molybdenum", "vanadium",
+    "diversified", "unclassified", "royalty", "silver-gold", "gold-copper",
+}
+NON_MINING_NAME_FLAGS = [
+    "digital", " ai ", " ai.", "software", "technologies inc", "insights",
+    "media", "pharma", "bio", "defense", "defence", "fintech", "payments",
+    "crypto", "blockchain", "cannabis", "beverage", "gaming", "esports",
+]
+
+
+@router.post("/api/admin/purge-non-mining")
+def purge_non_mining(dry_run: bool = True, db: Session = Depends(get_db)):
+    """Remove companies that aren't miners. dry_run=true (default) only
+    LISTS what would be deleted - review, then re-run with dry_run=false.
+    Deletion cascades to prices, financials, promotions, and news."""
+    targets = []
+    for c in db.execute(select(models.Company)).scalars():
+        low_name = f" {c.name.lower()} "
+        commodity_ok = (c.commodity or "").strip().lower() in MINING_COMMODITIES
+        name_flagged = any(fl in low_name for fl in NON_MINING_NAME_FLAGS)
+        mining_in_name = any(w in low_name for w in
+                             (" mining", " mines", " gold", " silver", " metals",
+                              " minerals", " resources", " uranium", " lithium",
+                              " copper", " exploration"))
+        if (not commodity_ok and not mining_in_name) or \
+           (name_flagged and not mining_in_name):
+            targets.append(c)
+    listing = [f"{c.ticker}: {c.name} [{c.commodity}]" for c in targets]
+    if dry_run:
+        return {"dry_run": True, "would_delete": listing,
+                "count": len(listing),
+                "next": "Re-run with dry_run=false to delete these."}
+    child_models = [models.DailyPrice, models.FinancialSnapshot,
+                    models.SharesHistory, models.Promotion, models.Financing,
+                    models.PressRelease, models.DilutionGrade,
+                    models.WarrantTranche, models.DrillResult,
+                    models.DrillProgram]
+    for c in targets:
+        for M in child_models:
+            for row in db.execute(select(M).where(
+                    M.company_id == c.id)).scalars():
+                db.delete(row)
+        db.delete(c)
+    db.commit()
+    return {"dry_run": False, "deleted": listing, "count": len(listing)}
