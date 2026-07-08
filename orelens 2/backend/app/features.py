@@ -2365,7 +2365,7 @@ def _run_url_ingest(urls: list[str]) -> None:
                     zone = low[:1500]   # headline + dateline only, not sidebars
                     for cand, core in cores:
                         if core and len(core) >= 5 and \
-                                _re.search(rf"\\b{_re.escape(core)}\\b", zone):
+                                _re.search(rf"\b{_re.escape(core)}\b", zone):
                             c = cand
                             break
                 if c is None and m:
@@ -2480,8 +2480,8 @@ def _run_verify_promotions() -> None:
                     _VERIFYPROMO_STATUS.update(stats); continue
                 zone = text[:2500]
                 named = (len(core) >= 5 and
-                         _re.search(rf"\\b{_re.escape(core)}\\b", zone)) or \
-                        _re.search(rf"\\b{_re.escape(c.ticker.lower())}\\b", zone)
+                         _re.search(rf"\b{_re.escape(core)}\b", zone)) or \
+                        _re.search(rf"\b{_re.escape(c.ticker.lower())}\b", zone)
                 if named:
                     stats["verified"] += 1
                 else:
@@ -2567,3 +2567,138 @@ def purge_non_mining(dry_run: bool = True, db: Session = Depends(get_db)):
         db.delete(c)
     db.commit()
     return {"dry_run": False, "deleted": listing, "count": len(listing)}
+
+
+# ------------------------------------------------ promotion link repair
+PRIMARY_WIRES = ("newsfilecorp.com", "globenewswire.com", "newswire.ca",
+                 "accesswire.com", "prnewswire.com", "businesswire.com",
+                 "thenewswire.com")
+
+_LINKREPAIR_STATUS: dict = {"state": "idle"}
+
+
+def _is_primary(url: str) -> bool:
+    return any(w in (url or "") for w in PRIMARY_WIRES)
+
+
+def _run_repair_promo_links() -> None:
+    import re as _re
+    import feedparser as _fp
+    import httpx as _hx
+    from urllib.parse import quote_plus as _qp
+    from .db import SessionLocal
+    from .services import promotion as _promo
+    db = SessionLocal()
+    ua = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")}
+    stats = {"state": "running", "checked": 0, "total": 0, "already_good": 0,
+             "repaired": [], "enriched": [], "unresolved": []}
+    _LINKREPAIR_STATUS.clear(); _LINKREPAIR_STATUS.update(stats)
+
+    def _page_ok(client, url, company):
+        try:
+            text = _promo.html_to_text(client.get(url).text)[:20_000]
+        except Exception:  # noqa: BLE001
+            return None
+        zone = text[:3000].lower()
+        core = _core_name(company.name)
+        named = (len(core) >= 5 and
+                 _re.search(rf"\b{_re.escape(core)}\b", zone)) or \
+                _re.search(rf"\b{_re.escape(company.ticker.lower())}\b", zone)
+        return text if named else None
+
+    try:
+        promos = db.execute(select(models.Promotion)).scalars().all()
+        stats["total"] = len(promos)
+        with _hx.Client(timeout=25, headers=ua, follow_redirects=True) as client:
+            for p in promos:
+                stats["checked"] += 1
+                c = db.get(models.Company, p.company_id)
+                if not c:
+                    _LINKREPAIR_STATUS.update(stats); continue
+                text = None
+                if _is_primary(p.source_url):
+                    text = _page_ok(client, p.source_url, c)
+                    if text:
+                        stats["already_good"] += 1
+                if text is None:
+                    # hunt the canonical wire release
+                    q = f'"{c.name}" engages'
+                    if p.firm:
+                        q = f'"{c.name}" "{p.firm.split()[0]}" engages'
+                    rss = (f"https://news.google.com/rss/search?q={_qp(q + ' when:400d')}"
+                           "&hl=en-CA&gl=CA&ceid=CA:en")
+                    try:
+                        feed = _fp.parse(client.get(rss).content)
+                    except Exception:  # noqa: BLE001
+                        feed = None
+                    found = None
+                    for e in (feed.entries[:8] if feed else []):
+                        real = _gnews_real_url(e.get("link", ""))
+                        if not real:
+                            try:
+                                real = _gnews_real_url(e.get("link", ""),
+                                                       client.get(e.get("link", "")).text)
+                            except Exception:  # noqa: BLE001
+                                continue
+                        if not real or not _is_primary(real):
+                            continue
+                        t = _page_ok(client, real, c)
+                        if t and _promo.parse_promotion(t[:20_000]):
+                            found = (real, t)
+                            break
+                    if found:
+                        old = (p.source_url or "")[:50]
+                        p.source_url = found[0][:400]
+                        text = found[1]
+                        stats["repaired"].append(
+                            f"{c.ticker}: {old}... -> {found[0][:70]}")
+                    else:
+                        stats["unresolved"].append(
+                            f"{c.ticker}: {(p.source_url or 'no url')[:70]}")
+                        db.commit()
+                        _LINKREPAIR_STATUS.update(stats)
+                        continue
+                # enrich missing fields from the full release text
+                if text and (p.amount is None or p.term_months is None):
+                    parsed = _promo.parse_promotion(text[:20_000])
+                    if parsed:
+                        changed = []
+                        if p.amount is None and parsed.get("amount"):
+                            p.amount = parsed["amount"]; changed.append("amount")
+                        if p.term_months is None and parsed.get("term_months"):
+                            p.term_months = parsed["term_months"]; changed.append("term")
+                        if p.ends is None and parsed.get("ends"):
+                            p.ends = parsed["ends"]; changed.append("ends")
+                        if not p.firm and parsed.get("firm"):
+                            p.firm = parsed["firm"]; changed.append("firm")
+                        if changed:
+                            stats["enriched"].append(f"{c.ticker}: +{'+'.join(changed)}")
+                db.commit()
+                _LINKREPAIR_STATUS.update(stats)
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _LINKREPAIR_STATUS.update(stats)
+
+
+@router.post("/api/admin/repair-promotion-links")
+def repair_promotion_links():
+    """Every promotion's disclosure link gets pointed at the canonical wire
+    release (Newsfile/GlobeNewswire/Newswire.ca...), replacing redirect tokens
+    and aggregators, and missing budgets/terms are re-parsed from the full
+    release. Background; poll repair-promotion-links-status."""
+    import threading
+    if _LINKREPAIR_STATUS.get("state") == "running":
+        return {"started": False, "progress": _LINKREPAIR_STATUS}
+    threading.Thread(target=_run_repair_promo_links, daemon=True).start()
+    return {"started": True,
+            "check_progress": "GET /api/admin/repair-promotion-links-status"}
+
+
+@router.get("/api/admin/repair-promotion-links-status")
+def repair_promotion_links_status():
+    return _LINKREPAIR_STATUS
