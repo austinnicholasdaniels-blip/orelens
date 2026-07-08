@@ -2884,3 +2884,244 @@ def data_sentinel(db: Session = Depends(get_db)):
                 f"{c.ticker}: '{(p.headline or '')[:60]}'")
     report["summary"] = {k: len(v) for k, v in report.items() if isinstance(v, list)}
     return report
+
+
+# ============================ THIS WEEK IN DILUTION =========================
+def _build_digest(db) -> dict:
+    """Assemble the weekly digest from the live database. Pure read."""
+    from datetime import datetime as _dt, timedelta as _td
+    today = date.today()
+    week_ago = today - _td(days=7)
+
+    # unlocks inside 14 days
+    unlocks = []
+    for r in db.execute(select(models.Financing).where(
+            models.Financing.hold_expiry.is_not(None),
+            models.Financing.hold_expiry >= today,
+            models.Financing.hold_expiry <= today + _td(days=14))
+            .order_by(models.Financing.hold_expiry)).scalars():
+        c = db.get(models.Company, r.company_id)
+        if not c:
+            continue
+        unlocks.append({"ticker": c.ticker, "name": c.name,
+                        "amount_m": r.amount and round(r.amount / 1e6, 1),
+                        "unlocks": r.hold_expiry.isoformat(),
+                        "days": (r.hold_expiry - today).days})
+
+    # promotions disclosed this week
+    promos = []
+    for p in db.execute(select(models.Promotion).where(
+            models.Promotion.announced >= week_ago)
+            .order_by(_desc(models.Promotion.announced))).scalars():
+        c = db.get(models.Company, p.company_id)
+        if not c:
+            continue
+        promos.append({"ticker": c.ticker, "name": c.name,
+                       "firm": p.firm, "paid": p.amount,
+                       "announced": p.announced.isoformat()})
+
+    # raises announced or closed this week
+    raises_ = []
+    for r in db.execute(select(models.Financing).where(
+            models.Financing.announced >= week_ago)
+            .order_by(_desc(models.Financing.announced))).scalars():
+        c = db.get(models.Company, r.company_id)
+        if not c:
+            continue
+        raises_.append({"ticker": c.ticker, "name": c.name,
+                        "amount_m": r.amount and round(r.amount / 1e6, 1),
+                        "kind": r.kind,
+                        "status": "closed" if r.closed else "announced"})
+
+    # grade moves: latest vs ~a week ago
+    moves = []
+    for c in db.execute(select(models.Company)).scalars():
+        rows = db.execute(select(models.DilutionGrade).where(
+            models.DilutionGrade.company_id == c.id)
+            .order_by(_desc(models.DilutionGrade.day)).limit(15)).scalars().all()
+        if len(rows) < 2:
+            continue
+        latest = rows[0]
+        prior = next((r for r in rows if (latest.day - r.day).days >= 5), rows[-1])
+        if prior.grade != latest.grade:
+            moves.append({"ticker": c.ticker, "name": c.name,
+                          "from": prior.grade, "to": latest.grade,
+                          "direction": "up" if latest.grade < prior.grade else "down"})
+
+    # shortest fuses (top 5 of burn league logic)
+    fuses = []
+    for c in db.execute(select(models.Company)).scalars():
+        br = _burn_runway(db, c.id)
+        if br and br["burn"] and br["fin"].cash and br["adj_runway"]:
+            fuses.append({"ticker": c.ticker, "name": c.name,
+                          "runway_m": round(br["adj_runway"], 1),
+                          "burn": round(br["burn"], 0)})
+    fuses.sort(key=lambda x: x["runway_m"])
+    fuses = fuses[:5]
+
+    # scoreboard headline stat
+    sb = promotion_scoreboard(db=db)["summary"]
+
+    dq_counts = {
+        "companies": len(db.execute(select(models.Company)).scalars().all()),
+        "unlocks_14d": len(unlocks),
+        "promos_week": len(promos),
+        "raises_week": len(raises_),
+    }
+    return {"week_of": today.isoformat(), "counts": dq_counts,
+            "unlocks": unlocks[:10], "promotions": promos[:10],
+            "raises": raises_[:10], "grade_moves": moves[:10],
+            "shortest_fuses": fuses, "scoreboard": {
+                "median_during": sb.get("median_return_during_pct"),
+                "median_after": sb.get("median_return_30d_after_pct"),
+                "campaigns": sb.get("campaigns_analyzed")}}
+
+
+@router.get("/api/digest/weekly")
+def digest_weekly(db: Session = Depends(get_db)):
+    return _build_digest(db)
+
+
+def _digest_html(d: dict) -> str:
+    """Email-safe HTML: inline styles, table layout, dark assay-lab theme."""
+    G, BG, TX, MUT, RED = "#E8B44A", "#101312", "#E9E4D8", "#8D958F", "#D4574E"
+    site = "https://orelens-web.onrender.com"
+
+    def row(cells, mono_idx=()):
+        tds = "".join(
+            f'<td style="padding:6px 10px;border-bottom:1px solid #2A302D;'
+            f'font-family:{chr(39)}Courier New{chr(39)},monospace;" if i in mono_idx else '
+            for i, _ in enumerate(cells))
+        return ""
+
+    def table(headers, rows_html):
+        head = "".join(f'<th style="text-align:left;padding:6px 10px;color:{MUT};'
+                       f'font-size:11px;text-transform:uppercase;letter-spacing:2px;'
+                       f'border-bottom:1px solid #2A302D;">{h}</th>' for h in headers)
+        return (f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="border-collapse:collapse;margin:8px 0 22px;">'
+                f'<tr>{head}</tr>{rows_html}</table>')
+
+    def td(v, color=TX, mono=False):
+        fam = "'Courier New',monospace" if mono else "Arial,sans-serif"
+        return (f'<td style="padding:7px 10px;border-bottom:1px solid #232826;'
+                f'color:{color};font-family:{fam};font-size:13px;">{v}</td>')
+
+    def section(title):
+        return (f'<p style="color:{MUT};font-size:11px;letter-spacing:3px;'
+                f'text-transform:uppercase;margin:26px 0 4px;">{title}</p>')
+
+    body = []
+    body.append(
+        f'<div style="text-align:center;padding:26px 0 6px;">'
+        f'<div style="color:{G};font-size:26px;letter-spacing:4px;'
+        f'font-family:Arial,sans-serif;font-weight:bold;">ORELENS</div>'
+        f'<div style="color:{TX};font-size:20px;margin-top:6px;'
+        f'font-family:Georgia,serif;">This Week in Dilution</div>'
+        f'<div style="color:{MUT};font-size:12px;margin-top:4px;">'
+        f'Week of {d["week_of"]} &middot; {d["counts"]["companies"]} companies tracked</div></div>')
+
+    if d["unlocks"]:
+        body.append(section("Unlocks hitting in the next 14 days"))
+        rows = "".join("<tr>" + td(u["ticker"], G, True) + td(u["name"])
+                       + td(f'${u["amount_m"]}M' if u["amount_m"] else "&mdash;", TX, True)
+                       + td(f'{u["days"]}d &middot; {u["unlocks"]}',
+                            RED if u["days"] <= 7 else MUT, True) + "</tr>"
+                       for u in d["unlocks"])
+        body.append(table(["Ticker", "Company", "Size", "Free-trades"], rows))
+
+    if d["promotions"]:
+        body.append(section("New paid promotions disclosed"))
+        rows = "".join("<tr>" + td(p["ticker"], G, True) + td(p["name"])
+                       + td(p["firm"] or "&mdash;")
+                       + td(f'${p["paid"]:,.0f}' if p["paid"] else "&mdash;", TX, True)
+                       + "</tr>" for p in d["promotions"])
+        body.append(table(["Ticker", "Company", "Firm", "Paid"], rows))
+
+    if d["raises"]:
+        body.append(section("Fresh raises this week"))
+        rows = "".join("<tr>" + td(r["ticker"], G, True) + td(r["name"])
+                       + td(f'${r["amount_m"]}M' if r["amount_m"] else "&mdash;", TX, True)
+                       + td(r["status"].upper(),
+                            RED if r["status"] == "announced" else MUT) + "</tr>"
+                       for r in d["raises"])
+        body.append(table(["Ticker", "Company", "Size", "Status"], rows))
+
+    if d["grade_moves"]:
+        body.append(section("Grade moves"))
+        rows = "".join("<tr>" + td(m["ticker"], G, True) + td(m["name"])
+                       + td(f'{m["from"]} &rarr; {m["to"]}',
+                            "#58B09C" if m["direction"] == "up" else RED, True)
+                       + "</tr>" for m in d["grade_moves"])
+        body.append(table(["Ticker", "Company", "Move"], rows))
+
+    if d["shortest_fuses"]:
+        body.append(section("Shortest fuses (adjusted runway)"))
+        rows = "".join("<tr>" + td(x["ticker"], G, True) + td(x["name"])
+                       + td(f'{x["runway_m"]} mo', RED if x["runway_m"] <= 6 else TX, True)
+                       + td(f'${x["burn"]:,.0f}/mo', MUT, True) + "</tr>"
+                       for x in d["shortest_fuses"])
+        body.append(table(["Ticker", "Company", "Runway", "Burn"], rows))
+
+    sb = d["scoreboard"]
+    if sb.get("median_during") is not None:
+        body.append(
+            f'<div style="border:1px solid {G};padding:14px;margin:24px 0;">'
+            f'<span style="color:{G};font-weight:bold;">The pattern:</span> '
+            f'<span style="color:{TX};">across {sb["campaigns"]} tracked campaigns, the '
+            f'median promoted stock moved {sb["median_during"]:+}% during its campaign'
+            + (f' and {sb["median_after"]:+}% in the 30 days after it ended'
+               if sb.get("median_after") is not None else "")
+            + f'. <a href="{site}/research/promotions" style="color:{G};">Full scoreboard &rarr;</a></span></div>')
+
+    body.append(
+        f'<div style="text-align:center;color:{MUT};font-size:11px;padding:18px 0;">'
+        f'<a href="{site}" style="color:{G};">orelens-web.onrender.com</a> &middot; '
+        f'Research tool, not investment advice. Every figure keeps its source.</div>')
+
+    return (f'<html><body style="margin:0;background:{BG};">'
+            f'<div style="max-width:640px;margin:0 auto;background:{BG};'
+            f'font-family:Arial,sans-serif;padding:0 18px 20px;">'
+            + "".join(body) + "</div></body></html>")
+
+
+@router.get("/api/digest/weekly.html")
+def digest_weekly_html(db: Session = Depends(get_db)):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_digest_html(_build_digest(db)))
+
+
+@router.post("/api/admin/send-digest")
+def send_digest(test_only_to: str | None = None, db: Session = Depends(get_db)):
+    """Email the digest to every beta signup via Resend. Set RESEND_API_KEY
+    in Render to enable. Use test_only_to=you@x.com for a solo test send."""
+    import httpx as _hx
+    from .config import settings as _s
+    if not _s.resend_api_key:
+        return {"error": "RESEND_API_KEY not configured",
+                "how": "Create a free account at resend.com, add your domain "
+                       "or use their test sender, then set RESEND_API_KEY in "
+                       "Render -> orelens-api -> Environment."}
+    d = _build_digest(db)
+    html = _digest_html(d)
+    subject = f"This Week in Dilution - {d['week_of']}"
+    if test_only_to:
+        recipients = [test_only_to]
+    else:
+        recipients = [r.email for r in db.execute(
+            select(models.BetaSignup)).scalars()]
+    sent, failed = 0, []
+    with _hx.Client(timeout=20) as client:
+        for email in recipients:
+            try:
+                r = client.post("https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {_s.resend_api_key}"},
+                    json={"from": _s.digest_from, "to": [email],
+                          "subject": subject, "html": html})
+                if r.status_code < 300:
+                    sent += 1
+                else:
+                    failed.append(f"{email}: {r.status_code}")
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"{email}: {str(exc)[:60]}")
+    return {"sent": sent, "failed": failed, "subject": subject}
