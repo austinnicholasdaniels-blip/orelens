@@ -20,6 +20,16 @@ from . import features as features_module
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
+    # additive micro-migration: OHLC columns on daily_prices (create_all
+    # never ALTERs existing tables). Safe to run every boot.
+    from sqlalchemy import text as _text
+    with engine.begin() as conn:
+        for col in ("open", "high", "low"):
+            try:
+                conn.execute(_text(
+                    f'ALTER TABLE daily_prices ADD COLUMN "{col}" FLOAT'))
+            except Exception:
+                pass   # already exists
     # First boot on a fresh database: load the demo universe so the UI isn't empty.
     import os
     if os.environ.get("SEED_ON_START") == "1":
@@ -175,7 +185,11 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
             "commodity": c.commodity, "jurisdiction": c.jurisdiction,
             "jurisdiction_tier": c.jurisdiction_tier, "project": c.project_name,
         },
-        "prices": [{"time": p.day.isoformat(), "value": p.close, "volume": p.volume}
+        "prices": [{"time": p.day.isoformat(), "value": p.close,
+                    "open": p.open if p.open is not None else p.close,
+                    "high": p.high if p.high is not None else p.close,
+                    "low": p.low if p.low is not None else p.close,
+                    "volume": p.volume}
                    for p in prices],
         "grade": grade and {
             "grade": grade.grade, "cash_runway_m": grade.cash_runway_m,
