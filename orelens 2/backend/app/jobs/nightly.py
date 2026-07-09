@@ -36,6 +36,8 @@ async def sync_prices(db: Session) -> None:
         data = await run_in_threadpool(yahoo.fetch_company_data, c.ticker, c.exchange, "5d")
         last = data["prices"][-1] if data["prices"] else None
         quote = {"close": last["close"], "volume": last["volume"],
+                 "open": last.get("open"), "high": last.get("high"),
+                 "low": last.get("low"),
                  "shares_outstanding": data["shares_outstanding"]} if last else None
         if not quote:
             continue
@@ -45,9 +47,14 @@ async def sync_prices(db: Session) -> None:
         ).scalar_one_or_none()
         if exists:
             exists.close, exists.volume = quote["close"], quote["volume"] or 0
+            if quote.get("open") is not None:
+                exists.open, exists.high, exists.low = (
+                    quote["open"], quote["high"], quote["low"])
         else:
             db.add(DailyPrice(company_id=c.id, day=date.today(),
-                              close=quote["close"], volume=quote["volume"] or 0))
+                              close=quote["close"], volume=quote["volume"] or 0,
+                              open=quote.get("open"), high=quote.get("high"),
+                              low=quote.get("low")))
         if quote.get("shares_outstanding"):
             c.shares_outstanding = quote["shares_outstanding"]
         if data.get("resolved_exchange") and data["resolved_exchange"] != c.exchange:
