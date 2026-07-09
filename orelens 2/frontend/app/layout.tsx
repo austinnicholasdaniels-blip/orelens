@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import SpotlightFooter from "@/components/SpotlightFooter";
 
 export const metadata: Metadata = {
   title: "OreLens — Dilution & Drill Intelligence",
@@ -31,7 +32,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <span className="text-xs text-ash font-mono hidden md:inline">nightly sync 23:00 EST</span>
           </nav>
         </header>
-        <main className="px-6 py-6 max-w-7xl mx-auto">{children}</main>
+        <main className="px-6 py-6 max-w-7xl mx-auto">{children}
+          <SpotlightFooter /></main>
       </body>
     </html>
   );
