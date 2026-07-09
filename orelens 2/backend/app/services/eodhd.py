@@ -104,8 +104,11 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
             d = _qdate(r.get("date"))
             close = _num(r.get("adjusted_close")) or _num(r.get("close"))
             if d and close:
-                out["prices"].append({"date": d, "close": close,
-                                      "volume": _num(r.get("volume")) or 0})
+                out["prices"].append({
+                    "date": d, "close": close,
+                    "open": _num(r.get("open")), "high": _num(r.get("high")),
+                    "low": _num(r.get("low")),
+                    "volume": _num(r.get("volume")) or 0})
 
     # ---- fundamentals (SEDAR-sourced for .TO/.V/.CN) ---------------------
     fund = _get(f"fundamentals/{sym}", {})
