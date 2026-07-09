@@ -75,7 +75,7 @@ export default function Landing() {
         {/* Fintel-style search front and center */}
         <div className="relative max-w-xl mx-auto mt-8">
           <input value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Search any junior mining stock - ticker or name..."
+            placeholder="Search any mining stock - TSX, TSXV, CSE, NYSE, NASDAQ, ASX..."
             className="w-full bg-tray border border-seam rounded-sm px-5 py-3.5 text-base placeholder:text-ash focus:border-assay focus:outline-none" />
           {q.trim().length >= 2 && hits.length > 0 && (
             <div className="absolute z-10 mt-1 w-full bg-tray border border-seam rounded-sm shadow-lg text-left">
