@@ -121,6 +121,12 @@ function DashboardInner() {
   const [commodity, setCommodity] = useState("");
   const [tier, setTier] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
+  const [spot, setSpot] = useState<Row | null>(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/spotlight`).then((r) => r.json())
+      .then((s) => s?.active && setSpot(s)).catch(() => {});
+  }, []);
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "", dir: -1 });
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
@@ -191,6 +197,13 @@ function DashboardInner() {
       return (av > bv ? 1 : av < bv ? -1 : 0) * sort.dir;
     });
   }, [rows, sort]);
+
+  const spotlightOrdered = (() => {
+    if (!spot || tab === "news") return sorted;
+    const idx = sorted.findIndex((r: Row) => r.ticker === spot.ticker);
+    if (idx <= 0) return sorted;
+    return [sorted[idx], ...sorted.slice(0, idx), ...sorted.slice(idx + 1)];
+  })();
 
   const cols = COLUMNS[tab];
 
@@ -265,8 +278,28 @@ function DashboardInner() {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((r, i) => (
-            <tr key={r.ticker ?? i}>
+          {spot && (
+            <tr>
+              <td colSpan={cols.length} className="!p-0">
+                <div className="flex items-center gap-3 px-3 py-2 border-l-2 border-assay"
+                     style={{ background: "linear-gradient(90deg, rgba(232,180,74,0.10), rgba(232,180,74,0.02))" }}>
+                  <span className="bg-assay text-shale text-[9px] font-bold tracking-[0.2em] px-1.5 py-0.5 rounded-sm">SPOTLIGHT</span>
+                  <a href={`/ticker/${spot.ticker}`} className="font-mono text-assay hover:underline">{spot.ticker}</a>
+                  <span className="text-sm truncate">{spot.headline}</span>
+                  <a href={`/ticker/${spot.ticker}`}
+                     className="ml-auto bg-assay text-shale text-xs font-semibold px-3 py-1 rounded-sm font-display tracking-wide hover:opacity-90 whitespace-nowrap">
+                    View the Story &rarr;
+                  </a>
+                  <span className="text-ash/60 text-[9px] whitespace-nowrap">Paid placement</span>
+                </div>
+              </td>
+            </tr>
+          )}
+          {spotlightOrdered.map((r, i) => (
+            <tr key={r.ticker ?? i}
+                style={spot && r.ticker === spot.ticker
+                  ? { background: "rgba(232,180,74,0.06)", boxShadow: "inset 2px 0 0 #E8B44A" }
+                  : undefined}>
               {cols.map((c) => (
                 <td key={c.key} className={c.key === "ticker" ? "font-mono" : ""}>
                   {c.key === "ticker" ? (
