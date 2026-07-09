@@ -286,7 +286,7 @@ function DashboardInner() {
                   <span className="bg-assay text-shale text-[9px] font-bold tracking-[0.2em] px-1.5 py-0.5 rounded-sm">SPOTLIGHT</span>
                   <a href={`/ticker/${spot.ticker}`} className="font-mono text-assay hover:underline">{spot.ticker}</a>
                   <span className="text-sm truncate">{spot.headline}</span>
-                  <a href={`/ticker/${spot.ticker}`}
+                  <a href={`/story/${spot.ticker}`}
                      className="ml-auto bg-assay text-shale text-xs font-semibold px-3 py-1 rounded-sm font-display tracking-wide hover:opacity-90 whitespace-nowrap">
                     View the Story &rarr;
                   </a>
