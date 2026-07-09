@@ -197,7 +197,7 @@ function DashboardInner() {
     <div>
       <div className="relative mb-5">
         <input value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Search any junior mining stock - ticker or name..."
+          placeholder="Search any mining stock - TSX, TSXV, CSE, NYSE, NASDAQ, ASX..."
           className="w-full bg-tray border border-seam rounded-sm px-4 py-2.5 text-sm placeholder:text-ash focus:border-assay focus:outline-none" />
         {q.trim().length >= 2 && (
           <div className="absolute z-10 mt-1 w-full bg-tray border border-seam rounded-sm shadow-lg">
