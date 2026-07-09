@@ -1557,7 +1557,9 @@ async def backfill_deep_history(years: int = 5, db: Session = Depends(get_db)):
         for row in data["prices"]:
             if row["date"] not in have_days:
                 db.add(models.DailyPrice(company_id=c.id, day=row["date"],
-                                         close=row["close"], volume=row["volume"]))
+                                         close=row["close"], volume=row["volume"],
+                                         open=row.get("open"), high=row.get("high"),
+                                         low=row.get("low")))
                 stats["price_rows_added"] += 1
         have_fs = {s.as_of for s in db.execute(select(models.FinancialSnapshot).where(
             models.FinancialSnapshot.company_id == c.id)).scalars()}
@@ -2133,7 +2135,9 @@ def _run_expand_universe() -> None:
             db.add(c); db.flush()
             for row in data["prices"]:
                 db.add(models.DailyPrice(company_id=c.id, day=row["date"],
-                                         close=row["close"], volume=row["volume"]))
+                                         close=row["close"], volume=row["volume"],
+                                         open=row.get("open"), high=row.get("high"),
+                                         low=row.get("low")))
             for ch in data.get("cash_history", []):
                 db.add(models.FinancialSnapshot(
                     company_id=c.id, as_of=ch["as_of"], cash=ch["cash"],
@@ -3177,3 +3181,70 @@ def send_digest(test_only_to: str | None = None, db: Session = Depends(get_db)):
             except Exception as exc:  # noqa: BLE001
                 failed.append(f"{email}: {str(exc)[:60]}")
     return {"sent": sent, "failed": failed, "subject": subject}
+
+
+# ------------------------------------------------- OHLC history backfill
+_OHLC_STATUS: dict = {"state": "idle"}
+
+
+def _run_ohlc_backfill() -> None:
+    """Repaint history with real open/high/low from EODHD so candlestick
+    charts render true candles instead of flat legacy rows."""
+    from .db import SessionLocal
+    from .services import eodhd as _e
+    db = SessionLocal()
+    stats = {"state": "running", "companies_done": 0, "companies_total": 0,
+             "rows_updated": 0, "rows_inserted": 0}
+    _OHLC_STATUS.clear(); _OHLC_STATUS.update(stats)
+    try:
+        companies = db.execute(select(models.Company)).scalars().all()
+        stats["companies_total"] = len(companies)
+        for c in companies:
+            try:
+                data = _e.fetch_company_data(c.ticker, c.exchange, "5y")
+            except Exception:  # noqa: BLE001
+                data = {"prices": []}
+            if data["prices"]:
+                rows = {p.day: p for p in db.execute(
+                    select(models.DailyPrice).where(
+                        models.DailyPrice.company_id == c.id)).scalars()}
+                for r in data["prices"]:
+                    ex = rows.get(r["date"])
+                    if ex is None:
+                        db.add(models.DailyPrice(
+                            company_id=c.id, day=r["date"], close=r["close"],
+                            volume=r["volume"], open=r.get("open"),
+                            high=r.get("high"), low=r.get("low")))
+                        stats["rows_inserted"] += 1
+                    elif ex.open is None and r.get("open") is not None:
+                        ex.open, ex.high, ex.low = r["open"], r["high"], r["low"]
+                        stats["rows_updated"] += 1
+                db.commit()
+            stats["companies_done"] += 1
+            _OHLC_STATUS.update(stats)
+        stats["state"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        stats["state"] = "error"; stats["error"] = str(exc)[:300]
+    finally:
+        db.close()
+        _OHLC_STATUS.update(stats)
+
+
+@router.post("/api/admin/backfill-ohlc")
+def backfill_ohlc():
+    """Fill open/high/low across all price history (background).
+    Poll backfill-ohlc-status."""
+    import threading
+    from .config import settings as _s
+    if not _s.eodhd_api_key:
+        return {"error": "EODHD_API_KEY not configured"}
+    if _OHLC_STATUS.get("state") == "running":
+        return {"started": False, "progress": _OHLC_STATUS}
+    threading.Thread(target=_run_ohlc_backfill, daemon=True).start()
+    return {"started": True, "check_progress": "GET /api/admin/backfill-ohlc-status"}
+
+
+@router.get("/api/admin/backfill-ohlc-status")
+def backfill_ohlc_status():
+    return _OHLC_STATUS
