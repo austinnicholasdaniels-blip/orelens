@@ -1891,7 +1891,8 @@ def bullish_setups(commodity: str | None = None, tier: str | None = None,
 _NEWS_STATUS: dict = {"state": "idle"}
 
 
-def _run_news_refresh(days: int, purge_bunched: bool) -> None:
+def _run_news_refresh(days: int, purge_bunched: bool,
+                      trigger: str = "manual") -> None:
     from collections import Counter
     from .db import SessionLocal
     from .config import settings as _s
@@ -1900,7 +1901,10 @@ def _run_news_refresh(days: int, purge_bunched: bool) -> None:
     from .services import promotion as _promo
     from .jobs.nightly import _upsert_financing, _upsert_promotion
     db = SessionLocal()
-    stats = {"state": "running", "companies_done": 0, "companies_total": 0,
+    from datetime import datetime as _dtt
+    stats = {"state": "running", "trigger": trigger,
+             "started_at": _dtt.utcnow().isoformat(timespec="seconds"),
+             "companies_done": 0, "companies_total": 0,
              "news_stored": 0, "bunched_rows_purged": 0,
              "financings_detected": 0, "promotions_detected": 0}
     _NEWS_STATUS.clear(); _NEWS_STATUS.update(stats)
