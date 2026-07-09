@@ -74,7 +74,7 @@ export default function SpotlightFooter() {
           </button>
         </div>
         <div className="flex items-center gap-3 ml-auto">
-          <a href="mailto:advertise@orelens.com?subject=Spotlight%20Inquiry"
+          <a href="mailto:advertise@getorelens.com?subject=Spotlight%20Inquiry"
              className="text-ash text-[11px] hover:text-assay whitespace-nowrap">
             Your company&apos;s story here &middot; <span className="underline">Advertise</span>
           </a>
