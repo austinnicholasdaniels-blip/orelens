@@ -3033,6 +3033,8 @@ def _build_digest(db) -> dict:
     for c in db.execute(select(models.Company)).scalars():
         br = _burn_runway(db, c.id)
         if br and br["burn"] and br["fin"].cash and br["adj_runway"]:
+            if br["burn"] > 20_000_000:
+                continue   # majors with credit lines aren't fuse stories
             fuses.append({"ticker": c.ticker, "name": c.name,
                           "runway_m": round(br["adj_runway"], 1),
                           "burn": round(br["burn"], 0)})
