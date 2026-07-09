@@ -3065,7 +3065,7 @@ def digest_weekly(db: Session = Depends(get_db)):
 def _digest_html(d: dict) -> str:
     """Email-safe HTML: inline styles, table layout, dark assay-lab theme."""
     G, BG, TX, MUT, RED = "#E8B44A", "#101312", "#E9E4D8", "#8D958F", "#D4574E"
-    site = "https://orelens-web.onrender.com"
+    site = "https://getorelens.com"
 
     def row(cells, mono_idx=()):
         tds = "".join(
@@ -3156,7 +3156,7 @@ def _digest_html(d: dict) -> str:
 
     body.append(
         f'<div style="text-align:center;color:{MUT};font-size:11px;padding:18px 0;">'
-        f'<a href="{site}" style="color:{G};">orelens-web.onrender.com</a> &middot; '
+        f'<a href="{site}" style="color:{G};">getorelens.com</a> &middot; '
         f'Research tool, not investment advice. Every figure keeps its source.</div>')
 
     return (f'<html><body style="margin:0;background:{BG};">'
