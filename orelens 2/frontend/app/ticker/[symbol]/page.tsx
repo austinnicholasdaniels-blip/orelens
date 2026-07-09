@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { getTicker, fmt } from "@/lib/api";
 import TVChart from "@/components/TVChart";
+import WatchButton from "@/components/WatchButton";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
 import SharesHistoryChart from "@/components/SharesHistoryChart";
@@ -44,6 +45,7 @@ function TickerInner({ params }: { params: { symbol: string } }) {
         <span className={`text-xs uppercase tracking-widest ${company.jurisdiction_tier === "Tier 1" ? "text-oxide" : "text-hazard"}`}>
           {company.jurisdiction_tier}
         </span>
+        <WatchButton ticker={company.ticker} />
       </div>
 
       <TVChart ticker={company.ticker} exchange={company.exchange} />
