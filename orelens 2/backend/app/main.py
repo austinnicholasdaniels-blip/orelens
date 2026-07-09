@@ -23,18 +23,19 @@ async def lifespan(app: FastAPI):
     # additive micro-migration: OHLC columns on daily_prices (create_all
     # never ALTERs existing tables). Safe to run every boot.
     from sqlalchemy import text as _text
-    with engine.begin() as conn:
-        for col in ("open", "high", "low"):
+    # each ALTER runs in its own autocommit statement: in Postgres, one
+    # failed statement (column already exists) aborts a shared transaction
+    # and silently kills every ALTER after it.
+    _alters = [f'ALTER TABLE daily_prices ADD COLUMN "{c}" FLOAT'
+               for c in ("open", "high", "low")]
+    _alters += [f'ALTER TABLE spotlights ADD COLUMN "{c}" TEXT'
+                for c in ("story_about", "story_website",
+                          "story_milestones", "story_news")]
+    with engine.connect() as conn:
+        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+        for stmt in _alters:
             try:
-                conn.execute(_text(
-                    f'ALTER TABLE daily_prices ADD COLUMN "{col}" FLOAT'))
-            except Exception:
-                pass   # already exists
-        for col in ("story_about", "story_website",
-                    "story_milestones", "story_news"):
-            try:
-                conn.execute(_text(
-                    f'ALTER TABLE spotlights ADD COLUMN "{col}" TEXT'))
+                conn.execute(_text(stmt))
             except Exception:
                 pass   # already exists
     # First boot on a fresh database: load the demo universe so the UI isn't empty.
