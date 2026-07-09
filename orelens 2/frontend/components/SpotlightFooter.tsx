@@ -64,7 +64,7 @@ export default function SpotlightFooter() {
           <p className="text-ash text-xs truncate">{spot.blurb}</p>
         </div>
         <div className="flex items-center gap-2">
-          <a href={`/ticker/${spot.ticker}`}
+          <a href={`/story/${spot.ticker}`}
              className="bg-assay text-shale font-semibold text-sm px-4 py-1.5 rounded-sm font-display tracking-wide hover:opacity-90 whitespace-nowrap">
             View the Story &rarr;
           </a>
