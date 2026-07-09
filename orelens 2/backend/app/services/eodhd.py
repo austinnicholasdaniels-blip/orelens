@@ -60,9 +60,12 @@ def _qdate(s: str):
         return None
 
 
-# Canadian juniors migrate between boards: probe the whole chain.
-SIBLINGS = {"TSXV": ["TSX", "CSE", "NEO"], "TSX": ["TSXV", "CSE", "NEO"],
-            "CSE": ["TSXV", "TSX", "NEO"], "NEO": ["TSX", "TSXV", "CSE"]}
+# boards migrate; the chain ends at the US listing so NYSE/NASDAQ names
+# added via search resolve too.
+SIBLINGS = {"TSXV": ["TSX", "CSE", "NEO", "NYSE"],
+            "TSX": ["TSXV", "CSE", "NEO", "NYSE"],
+            "CSE": ["TSXV", "TSX", "NEO", "NYSE"],
+            "NEO": ["TSX", "TSXV", "CSE", "NYSE"]}
 SIBLING = {k: v[0] for k, v in SIBLINGS.items()}   # legacy alias
 
 
@@ -110,6 +113,10 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
         return out
 
     gen = fund.get("General") or {}
+    if out.get("resolved_exchange") == "NYSE":
+        gex = (gen.get("Exchange") or "").upper()
+        if "NASDAQ" in gex:
+            out["resolved_exchange"] = "NASDAQ"
     out["sector"] = gen.get("Sector")
     out["industry"] = gen.get("Industry")
     desc = gen.get("Description")
