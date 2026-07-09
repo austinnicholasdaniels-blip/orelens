@@ -219,3 +219,8 @@ class Spotlight(Base):
     blurb: Mapped[str] = mapped_column(String(300))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # custom story landing page (all optional; JSON stored as text)
+    story_about: Mapped[str | None] = mapped_column(Text, nullable=True)
+    story_website: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    story_milestones: Mapped[str | None] = mapped_column(Text, nullable=True)
+    story_news: Mapped[str | None] = mapped_column(Text, nullable=True)
