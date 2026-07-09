@@ -43,6 +43,26 @@ async def lifespan(app: FastAPI):
     # every weeknight 23:00 EST (America/New_York handles DST)
     scheduler.add_job(run_nightly, CronTrigger(
         day_of_week="mon-fri", hour=23, minute=0, timezone="America/New_York"))
+
+    # Morning news autopilot: the wire is busiest 6-11 AM ET. Sweep licensed
+    # news every 30 minutes through the window so the feed, unlock calendar,
+    # and promotion registry stay current without anyone pressing a button.
+    def _morning_news_sweep():
+        import threading
+        from .features import _NEWS_STATUS, _run_news_refresh
+        from .config import settings as _s
+        if not _s.eodhd_api_key or _NEWS_STATUS.get("state") == "running":
+            return
+        threading.Thread(target=_run_news_refresh, args=(1, False),
+                         kwargs={"trigger": "auto-morning"},
+                         daemon=True).start()
+
+    scheduler.add_job(_morning_news_sweep, CronTrigger(
+        day_of_week="mon-fri", hour="6-10", minute="0,30",
+        timezone="America/New_York"))
+    scheduler.add_job(_morning_news_sweep, CronTrigger(
+        day_of_week="mon-fri", hour=11, minute=0,
+        timezone="America/New_York"))
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
