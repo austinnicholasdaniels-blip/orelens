@@ -3272,3 +3272,44 @@ def backfill_ohlc():
 @router.get("/api/admin/backfill-ohlc-status")
 def backfill_ohlc_status():
     return _OHLC_STATUS
+
+
+# ------------------------------------------------- sponsored spotlight slot
+_DEFAULT_SPOT = {"ticker": "CCJ",
+                 "headline": "Uranium's Blue Chip Is Back in the Spotlight",
+                 "blurb": ("Cameco (NYSE: CCJ) - powering the nuclear "
+                           "renaissance from the Athabasca Basin to Westinghouse. "
+                           "See the full capital story.")}
+
+
+@router.get("/api/spotlight")
+def get_spotlight(db: Session = Depends(get_db)):
+    row = db.execute(select(models.Spotlight)
+        .order_by(_desc(models.Spotlight.created)).limit(1)).scalar_one_or_none()
+    if row is None:
+        return {"active": True, **_DEFAULT_SPOT}
+    if not row.active:
+        return {"active": False}
+    return {"active": True, "ticker": row.ticker,
+            "headline": row.headline, "blurb": row.blurb}
+
+
+class SpotlightBody(BaseModel):
+    ticker: str
+    headline: str
+    blurb: str
+    active: bool = True
+
+
+@router.post("/api/admin/set-spotlight")
+def set_spotlight(body: SpotlightBody, db: Session = Depends(get_db)):
+    """Swap the sponsored footer slot without a deploy. Set active=false to
+    hide the unit entirely."""
+    for old in db.execute(select(models.Spotlight)).scalars():
+        old.active = False
+    db.add(models.Spotlight(ticker=body.ticker.upper().strip()[:10],
+                            headline=body.headline.strip()[:120],
+                            blurb=body.blurb.strip()[:300],
+                            active=body.active))
+    db.commit()
+    return {"spotlight_now": body.ticker.upper(), "active": body.active}
