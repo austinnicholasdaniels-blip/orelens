@@ -208,3 +208,14 @@ class BetaSignup(Base):
     account_size: Mapped[str] = mapped_column(String(30))
     token: Mapped[str] = mapped_column(String(64), index=True)
     created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Spotlight(Base):
+    """The sellable footer ad slot: one active sponsored company story."""
+    __tablename__ = "spotlights"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10))
+    headline: Mapped[str] = mapped_column(String(120))
+    blurb: Mapped[str] = mapped_column(String(300))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
