@@ -26,7 +26,8 @@ export default function Landing() {
   useEffect(() => {
     const get = (p: string) => fetch(`${API}${p}`).then((r) => r.json()).catch(() => null);
     get("/api/data-quality").then((d) => d && setDq(d));
-    get("/api/scanners/unlock-calendar").then((d) => Array.isArray(d) && setUnlocks(d.slice(0, 5)));
+    get("/api/scanners/unlock-calendar").then((d) => Array.isArray(d) &&
+      setUnlocks(d.filter((u: Row) => (u.days_until ?? 0) >= 0).slice(0, 5)));
     get("/api/scanners/stock-promotions").then((d) => {
       if (!Array.isArray(d)) return;
       const seen = new Set<string>();
