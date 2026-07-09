@@ -30,6 +30,13 @@ async def lifespan(app: FastAPI):
                     f'ALTER TABLE daily_prices ADD COLUMN "{col}" FLOAT'))
             except Exception:
                 pass   # already exists
+        for col in ("story_about", "story_website",
+                    "story_milestones", "story_news"):
+            try:
+                conn.execute(_text(
+                    f'ALTER TABLE spotlights ADD COLUMN "{col}" TEXT'))
+            except Exception:
+                pass   # already exists
     # First boot on a fresh database: load the demo universe so the UI isn't empty.
     import os
     if os.environ.get("SEED_ON_START") == "1":
