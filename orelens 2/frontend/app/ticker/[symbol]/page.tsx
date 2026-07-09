@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getTicker, fmt } from "@/lib/api";
-import PriceChart from "@/components/PriceChart";
+import TVChart from "@/components/TVChart";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
 import SharesHistoryChart from "@/components/SharesHistoryChart";
@@ -46,7 +46,7 @@ function TickerInner({ params }: { params: { symbol: string } }) {
         </span>
       </div>
 
-      <PriceChart prices={prices} />
+      <TVChart ticker={company.ticker} exchange={company.exchange} />
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-6">
