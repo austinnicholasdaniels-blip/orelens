@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getScanner } from "@/lib/api";
 import GradeChip from "@/components/GradeChip";
 import BetaGate from "@/components/BetaGate";
+import WatchlistBar from "@/components/WatchlistBar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -194,7 +195,9 @@ function DashboardInner() {
   const cols = COLUMNS[tab];
 
   return (
-    <div>
+    <>
+      <WatchlistBar />
+      <div>
       <div className="relative mb-5">
         <input value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search any mining stock - TSX, TSXV, CSE, NYSE, NASDAQ, ASX..."
@@ -306,5 +309,6 @@ function DashboardInner() {
       </table>
 
     </div>
+  </>
   );
 }
