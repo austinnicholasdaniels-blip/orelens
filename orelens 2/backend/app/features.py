@@ -3299,6 +3299,11 @@ class SpotlightBody(BaseModel):
     headline: str
     blurb: str
     active: bool = True
+    # custom story landing page (all optional)
+    story_about: str | None = None
+    story_website: str | None = None
+    story_milestones: list[dict] | None = None   # [{"date","title","desc"?}]
+    story_news: list[dict] | None = None         # [{"date","headline","url"?}]
 
 
 @router.post("/api/admin/set-spotlight")
@@ -3307,9 +3312,59 @@ def set_spotlight(body: SpotlightBody, db: Session = Depends(get_db)):
     hide the unit entirely."""
     for old in db.execute(select(models.Spotlight)).scalars():
         old.active = False
+    import json as _json
     db.add(models.Spotlight(ticker=body.ticker.upper().strip()[:10],
                             headline=body.headline.strip()[:120],
                             blurb=body.blurb.strip()[:300],
-                            active=body.active))
+                            active=body.active,
+                            story_about=body.story_about,
+                            story_website=body.story_website,
+                            story_milestones=_json.dumps(body.story_milestones)
+                            if body.story_milestones else None,
+                            story_news=_json.dumps(body.story_news)
+                            if body.story_news else None))
     db.commit()
     return {"spotlight_now": body.ticker.upper(), "active": body.active}
+
+
+@router.get("/api/story/{ticker}")
+def sponsor_story(ticker: str, db: Session = Depends(get_db)):
+    """The sponsored landing page payload: the company's story A to Z.
+    Curated fields come from set-spotlight; anything missing falls back to
+    real data already on file (description, recent releases)."""
+    import json as _json
+    t = ticker.upper().strip()
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == t)).scalar_one_or_none()
+    if not c:
+        return {"error": "not tracked"}
+    spot = db.execute(select(models.Spotlight)
+        .order_by(_desc(models.Spotlight.created)).limit(1)).scalar_one_or_none()
+    curated = spot if (spot and spot.ticker == t) else None
+    milestones = (_json.loads(curated.story_milestones)
+                  if curated and curated.story_milestones else [])
+    news = (_json.loads(curated.story_news)
+            if curated and curated.story_news else [])
+    if not news:
+        for r in db.execute(select(models.PressRelease).where(
+                models.PressRelease.company_id == c.id)
+                .order_by(_desc(models.PressRelease.published))
+                .limit(6)).scalars():
+            news.append({"date": r.published.date().isoformat()
+                         if hasattr(r.published, "date") else str(r.published),
+                         "headline": r.headline, "url": r.url})
+    about = (curated.story_about if curated and curated.story_about
+             else (getattr(c, "description", None) or ""))
+    fin = _latest_fin(db, c.id)
+    return {"ticker": c.ticker, "exchange": c.exchange, "name": c.name,
+            "commodity": c.commodity, "jurisdiction": c.jurisdiction,
+            "headline": curated.headline if curated else None,
+            "blurb": curated.blurb if curated else None,
+            "about": about,
+            "website": curated.story_website if curated else None,
+            "milestones": milestones, "news": news[:8],
+            "snapshot": {
+                "shares_outstanding": c.shares_outstanding,
+                "cash": fin.cash if fin else None,
+                "as_of": fin.as_of.isoformat() if fin else None},
+            "sponsored": bool(curated)}
