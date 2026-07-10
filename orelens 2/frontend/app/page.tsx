@@ -104,7 +104,7 @@ export default function Landing() {
         </div>
         <p className="text-ash mt-3">
           <span className="line-through mr-1.5">$725/yr</span>
-          <span className="text-bone font-semibold">$99.99/yr founding price</span>
+          <span className="text-bone font-semibold">$97.99/yr founding price</span>
           <span className="text-oxide"> - locks in for life. Rises when the launch window closes.</span>
         </p>
       </section>
