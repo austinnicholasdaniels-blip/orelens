@@ -8,18 +8,26 @@ import WatchlistBar from "@/components/WatchlistBar";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type Row = Record<string, any>;
-const TABS = [
-  { id: "all-stocks", label: "All Stocks" },
+const BULLISH_TABS = [
   { id: "value-momentum", label: "Best Bang-for-Buck" },
   { id: "bullish-setups", label: "Bullish Setups" },
+  { id: "coiled-springs", label: "Coiled Springs" },
+  { id: "active-drills", label: "Active Drill Programs" },
+] as const;
+
+const RISK_TABS = [
   { id: "dilution-risk", label: "Dilution Risk" },
   { id: "burn-league", label: "Burn League" },
   { id: "serial-raisers", label: "Serial Raisers" },
   { id: "most-dilutive", label: "Most Dilutive" },
-  { id: "coiled-springs", label: "Coiled Springs" },
   { id: "unlock-calendar", label: "Unlock Calendar" },
   { id: "stock-promotions", label: "Stock Promotions" },
-  { id: "active-drills", label: "Active Drill Programs" },
+] as const;
+
+const TABS = [
+  { id: "all-stocks", label: "All Stocks" },
+  ...BULLISH_TABS,
+  ...RISK_TABS,
 ] as const;
 
 const COMMODITIES = ["Gold", "Silver", "Copper", "Nickel", "Lithium"];
@@ -236,25 +244,51 @@ function DashboardInner() {
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 mb-5">
-        {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
+      <div className="mb-5 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => setTab("all-stocks")}
             className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
-              tab === t.id ? "border-assay text-assay bg-tray" : "border-seam text-ash hover:text-bone"}`}>
-            {t.label}
+              tab === "all-stocks" ? "border-assay text-assay bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+            All Stocks
           </button>
-        ))}
-        <div className="ml-auto flex gap-2">
-          <select value={commodity} onChange={(e) => setCommodity(e.target.value)}
-            className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
-            <option value="">All commodities</option>
-            {COMMODITIES.map((c) => <option key={c}>{c}</option>)}
-          </select>
-          <select value={tier} onChange={(e) => setTier(e.target.value)}
-            className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
-            <option value="">All jurisdictions</option>
-            {TIERS.map((t) => <option key={t}>{t}</option>)}
-          </select>
+          <div className="ml-auto flex gap-2">
+            <select value={commodity} onChange={(e) => setCommodity(e.target.value)}
+              className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
+              <option value="">All commodities</option>
+              {COMMODITIES.map((c) => <option key={c}>{c}</option>)}
+            </select>
+            <select value={tier} onChange={(e) => setTier(e.target.value)}
+              className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
+              <option value="">All jurisdictions</option>
+              {TIERS.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="border border-oxide/40 rounded-sm p-3">
+            <p className="text-oxide text-[10px] uppercase tracking-[0.3em] mb-2">Bullish Scanners</p>
+            <div className="flex flex-wrap gap-2">
+              {BULLISH_TABS.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
+                    tab === t.id ? "border-oxide text-oxide bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="border border-hazard/40 rounded-sm p-3">
+            <p className="text-hazard text-[10px] uppercase tracking-[0.3em] mb-2">Risk Factors</p>
+            <div className="flex flex-wrap gap-2">
+              {RISK_TABS.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
+                    tab === t.id ? "border-hazard text-hazard bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
