@@ -67,7 +67,7 @@ export default function Landing() {
         <h1 className="font-display text-5xl md:text-6xl tracking-wide leading-tight">
           See dilution <span className="text-hazard">before</span> it hits.
         </h1>
-        <p className="text-bone/90 max-w-2xl mx-auto mt-4 text-lg">
+        <p className="text-bone/90 max-w-2xl mx-auto mt-4 text-xl leading-relaxed">
           Dilution grades, the Unlock Calendar, and the promotion registry for
           TSX-V and TSX mining stocks - built from filings and disclosures,
           updated every night.
@@ -92,12 +92,35 @@ export default function Landing() {
           )}
         </div>
 
-        <div className="flex items-center justify-center gap-4 mt-6">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-7">
+          <Link href="/pricing"
+            className="bg-assay text-shale font-semibold px-7 py-3.5 rounded-sm font-display text-xl tracking-wide hover:opacity-90">
+            Become a Founding Member &rarr;
+          </Link>
           <Link href="/dashboard"
-            className="bg-assay text-shale font-semibold px-6 py-3 rounded-sm font-display text-lg tracking-wide hover:opacity-90">
-            Open the Dashboard
+            className="border border-seam text-bone px-7 py-3.5 rounded-sm font-display text-xl tracking-wide hover:border-assay hover:text-assay">
+            See the Terminal
           </Link>
         </div>
+        <p className="text-ash mt-3">
+          <span className="line-through mr-1.5">$725/yr</span>
+          <span className="text-bone font-semibold">$99.99/yr founding price</span>
+          <span className="text-oxide"> - locks in for life. Rises when the launch window closes.</span>
+        </p>
+      </section>
+
+      {/* Why members pay - three concrete reasons */}
+      <section className="grid md:grid-cols-3 gap-3">
+        {[
+          { t: "Dilution Grades A-F", d: "Every company scored nightly on runway, burn, and issuance habits - straight from the filings. Know who needs money before they ask for yours." },
+          { t: "The Unlock Calendar", d: "Private-placement paper goes free-trading on a schedule. See the date, the size, and the overhang - before it hits the tape." },
+          { t: "The Assayer - AI", d: "Type in your trade idea. It gets graded against our dilution database - runway vs. your timeline, raises coming, promotions running. Nowhere else." },
+        ].map((c) => (
+          <div key={c.t} className="bg-tray border border-seam rounded-sm p-5 text-left">
+            <p className="font-display text-2xl tracking-wide text-assay">{c.t}</p>
+            <p className="text-bone/85 mt-2 leading-relaxed">{c.d}</p>
+          </div>
+        ))}
       </section>
 
       {/* Live stats band */}
