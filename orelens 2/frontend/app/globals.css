@@ -55,3 +55,37 @@ a.bg-assay:hover, button.bg-assay:hover {
   color: #F0CB78;
   padding: 0 2px;
 }
+
+/* Promo bar motion: a slow gold shimmer sweep + breathing badge + nudging
+   arrow. Attention-grabbing, never strobing. */
+.promo-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 40%,
+              rgba(240, 203, 120, 0.16) 50%, transparent 60%);
+  background-size: 250% 100%;
+  animation: promo-sweep 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes promo-sweep {
+  0%   { background-position: 120% 0; }
+  60%  { background-position: -60% 0; }
+  100% { background-position: -60% 0; }
+}
+.promo-pulse {
+  animation: promo-breathe 2.2s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(227, 179, 86, 0.45);
+}
+@keyframes promo-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(227, 179, 86, 0.45); }
+  50%      { box-shadow: 0 0 14px 2px rgba(227, 179, 86, 0.35); }
+}
+.promo-arrow { animation: promo-nudge 1.4s ease-in-out infinite; }
+@keyframes promo-nudge {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .promo-shimmer::after, .promo-pulse, .promo-arrow { animation: none; }
+}
