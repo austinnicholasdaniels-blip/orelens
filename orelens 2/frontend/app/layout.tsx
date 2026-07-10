@@ -29,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <a href="/news" className="text-bone hover:text-assay">News</a>
             <a href="/research/promotions" className="text-bone hover:text-assay">Research</a>
             <a href="/digest" className="text-bone hover:text-assay">Digest</a>
+            <a href="/pricing" className="text-assay hover:opacity-80">Pricing</a>
             <span className="text-xs text-ash font-mono hidden md:inline">nightly sync 23:00 EST</span>
           </nav>
         </header>
