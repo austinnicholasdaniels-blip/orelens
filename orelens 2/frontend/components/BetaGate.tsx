@@ -29,8 +29,9 @@ export default function BetaGate({ children }: { children: React.ReactNode }) {
           The full terminal is for members.
         </h2>
         <p className="text-bone/85 mt-4">
-          Every scanner, the Unlock Calendar, dilution grades on 200+ mining
-          companies, and the promotion registry - refreshed nightly.
+          The only terminal of its kind: every scanner, the Unlock Calendar,
+          dilution grades on 200+ mining companies, and the promotion
+          registry - refreshed nightly. There is no second OreLens.
         </p>
         <p className="mt-5">
           <span className="font-display text-3xl">$99.99</span>
