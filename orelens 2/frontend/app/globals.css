@@ -48,3 +48,10 @@ a.bg-assay:hover, button.bg-assay:hover {
               rgba(227, 179, 86, 0.12), rgba(227, 179, 86, 0.04) 45%,
               transparent 72%);
 }
+
+/* Highlighted sales phrases: gold marker effect */
+.hl {
+  background: linear-gradient(180deg, rgba(227, 179, 86, 0.0) 55%, rgba(227, 179, 86, 0.32) 55%);
+  color: #F0CB78;
+  padding: 0 2px;
+}
