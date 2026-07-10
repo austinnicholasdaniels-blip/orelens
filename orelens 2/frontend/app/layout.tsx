@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import SpotlightFooter from "@/components/SpotlightFooter";
+import NavLinks from "@/components/NavLinks";
 
 export const metadata: Metadata = {
   title: "OreLens — Dilution & Drill Intelligence",
@@ -25,14 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             Dilution · Warrants · Drill Results
           </span>
           <nav className="ml-auto flex items-baseline gap-5 text-sm">
-            <a href="/dashboard" className="text-bone hover:text-assay">Scanners</a>
-            <a href="/news" className="text-bone hover:text-assay">News</a>
-            <a href="/research/promotions" className="text-bone hover:text-assay">Research</a>
-            <a href="/digest" className="text-bone hover:text-assay">Digest</a>
-            <a href="/assayer" className="text-bone hover:text-assay">Assayer</a>
-            <a href="/pricing" className="text-assay hover:opacity-80">Pricing</a>
-            <a href="/login" className="text-bone hover:text-assay">Log in</a>
-            <span className="text-xs text-ash font-mono hidden md:inline">nightly sync 23:00 EST</span>
+            <NavLinks />
           </nav>
         </header>
         <main className="px-6 py-6 max-w-7xl mx-auto">{children}
