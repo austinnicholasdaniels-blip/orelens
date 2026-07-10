@@ -1924,7 +1924,9 @@ def _run_news_refresh(days: int, purge_bunched: bool,
             db.commit()
 
         # one article often tags several tickers - dedupe across the whole run
-        seen_urls = {u for (u,) in db.execute(select(models.PressRelease.url))}
+        # (keys truncated to 400 chars to exactly match what the DB stores)
+        seen_urls = {u[:400] for (u,) in
+                     db.execute(select(models.PressRelease.url))}
         companies = db.execute(select(models.Company)).scalars().all()
         stats["companies_total"] = len(companies)
         for c in companies:
@@ -1934,7 +1936,7 @@ def _run_news_refresh(days: int, purge_bunched: bool,
                 items = []
             core = _core_name(c.name)
             for item in items:
-                if item["url"] in seen_urls:
+                if item["url"][:400] in seen_urls:
                     continue
                 text = f"{item['headline']} {item['summary']}"
                 low = text.lower()
@@ -1944,7 +1946,7 @@ def _run_news_refresh(days: int, purge_bunched: bool,
                 # names the company or plainly reads as mining.
                 if core not in low and not any(h in low for h in MINING_HINTS):
                     continue
-                seen_urls.add(item["url"])
+                seen_urls.add(item["url"][:400])
                 db.add(models.PressRelease(
                     company_id=c.id, published=item["published"],
                     headline=item["headline"][:400], url=item["url"][:400],
@@ -1960,7 +1962,12 @@ def _run_news_refresh(days: int, purge_bunched: bool,
                     _upsert_promotion(db, c.id, item["published"],
                                       item["headline"][:400], item["url"][:400], ppar)
                     stats["promotions_detected"] += 1
-            db.commit()
+            try:
+                db.commit()
+            except Exception:  # noqa: BLE001
+                # a racing run inserted the same article first - drop just
+                # this company's batch and keep the pipeline moving
+                db.rollback()
             stats["companies_done"] += 1
             _NEWS_STATUS.update(stats)
         stats["state"] = "done"
