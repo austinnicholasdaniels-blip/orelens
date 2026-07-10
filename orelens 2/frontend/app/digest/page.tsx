@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import ConversionBand from "@/components/ConversionBand";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type Row = Record<string, any>;
@@ -119,6 +120,7 @@ export default function Digest() {
         Assembled automatically from filings, disclosures, and market data.
         Research tool, not investment advice.
       </p>
+      <ConversionBand context="Get this intelligence every week - plus the terminal behind it." />
     </div>
   );
 }
