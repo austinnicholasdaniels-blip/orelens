@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { syncCookieToServer } from "@/components/watchlistClient";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -34,6 +35,7 @@ export default function Login() {
       });
       const d = await r.json();
       if (d.ok && d.token) {
+        await syncCookieToServer(d.token);
         const yr = 365 * 24 * 3600;
         document.cookie = `orelens_session=${d.token}; max-age=${yr}; path=/; SameSite=Lax`;
         document.cookie = `orelens_beta=1; max-age=${yr}; path=/; SameSite=Lax`;
