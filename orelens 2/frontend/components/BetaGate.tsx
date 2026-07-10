@@ -39,6 +39,15 @@ export default function BetaGate({ children }: { children: React.ReactNode }) {
         <p className="text-oxide text-sm mt-1">
           Founding-member launch price &middot; $725/year after the launch window
         </p>
+        <div className="text-left max-w-sm mx-auto mt-5 space-y-1.5">
+          {["All 11 scanners + dilution grades on 200+ miners",
+            "Unlock Calendar + disclosed promotion registry",
+            "The Assayer - AI grading for your trade ideas"].map((f) => (
+            <p key={f} className="text-sm text-bone/90">
+              <span className="text-oxide mr-2">{"\u2713"}</span>{f}
+            </p>
+          ))}
+        </div>
         <div className="flex flex-col sm:flex-row gap-3 justify-center mt-6">
           <a href="/pricing"
              className="bg-assay text-shale font-display tracking-wide font-semibold px-7 py-3 rounded-sm hover:opacity-90">
@@ -50,7 +59,8 @@ export default function BetaGate({ children }: { children: React.ReactNode }) {
           </a>
         </div>
         <p className="text-ash text-xs mt-5">
-          Research platform, not investment advice. Cancel anytime via Stripe.
+          30-second Stripe checkout &middot; cancel anytime &middot; founding price
+          rises to $725/yr at launch. Research platform, not investment advice.
         </p>
       </div>
     </div>
