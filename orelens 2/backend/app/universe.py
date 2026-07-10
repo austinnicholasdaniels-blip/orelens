@@ -63,7 +63,6 @@ UNIVERSE = [
     ("ABRA", "TSX",  "AbraSilver Resource",   "Silver", "Salta, Argentina",      "Tier 1", "Diablillos"),
     ("BRC",  "TSXV", "Blackrock Silver",      "Silver", "Nevada, USA",           "Tier 1", "Tonopah West"),
     ("SLVR", "TSXV", "Silver Tiger Metals",   "Silver", "Sonora, Mexico",        "Tier 1", "El Tigre"),
-    ("DV",   "TSXV", "Dolly Varden Silver",   "Silver", "Golden Triangle, BC",   "Tier 1", "Kitsault Valley"),
     ("AAG",  "TSXV", "Aftermath Silver",      "Silver", "Puno, Peru",            "High Risk", "Berenguela"),
     ("KTN",  "TSXV", "Kootenay Silver",       "Silver", "Sonora, Mexico",        "Tier 1", "Columba"),
     ("SSV",  "TSXV", "Southern Silver",       "Silver", "Durango, Mexico",       "Tier 1", "Cerro Las Minitas"),
