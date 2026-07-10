@@ -246,3 +246,12 @@ class LoginCode(Base):
     code_hash: Mapped[str] = mapped_column(String(64))
     expires: Mapped[datetime] = mapped_column(DateTime)
     used: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class WatchlistItem(Base):
+    """A member's watched ticker - server-side, synced across devices."""
+    __tablename__ = "watchlist_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
+    ticker: Mapped[str] = mapped_column(String(10), index=True)
+    created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
