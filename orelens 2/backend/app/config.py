@@ -21,6 +21,8 @@ class Settings(BaseSettings):
         "https://buy.stripe.com/4gM6oIa5x3U41Om7Gb9AA00")
     stripe_webhook_secret: str = ""  # Stripe webhook signing secret (STRIPE_WEBHOOK_SECRET)
     session_secret: str = ""       # signs login session tokens (SESSION_SECRET)
+    anthropic_api_key: str = ""    # powers The Assayer (ANTHROPIC_API_KEY)
+    assayer_model: str = "claude-sonnet-4-6"
     digest_from: str = "OreLens <digest@orelens.com>"
     eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
     admin_key: str = ""            # locks /api/admin/* when set (ADMIN_KEY env)
@@ -29,6 +31,8 @@ class Settings(BaseSettings):
         "https://buy.stripe.com/4gM6oIa5x3U41Om7Gb9AA00")
     stripe_webhook_secret: str = ""  # Stripe webhook signing secret (STRIPE_WEBHOOK_SECRET)
     session_secret: str = ""       # signs login session tokens (SESSION_SECRET)
+    anthropic_api_key: str = ""    # powers The Assayer (ANTHROPIC_API_KEY)
+    assayer_model: str = "claude-sonnet-4-6"
     digest_from: str = "OreLens <digest@orelens.com>"
     cost_per_meter_default: float = 250.0  # CAD, all-in diamond drilling default
     class Config:
