@@ -3883,3 +3883,36 @@ def assay_history(token: str, db: Session = Depends(get_db)):
          "grade": r.grade, "when": r.created.isoformat(),
          "assay": _json.loads(r.response_json) if r.response_json else None}
         for r in rows]}
+
+
+class DeleteCompanyBody(BaseModel):
+    ticker: str
+
+
+@router.post("/api/admin/delete-company")
+def delete_company(body: DeleteCompanyBody, db: Session = Depends(get_db)):
+    """Remove a company and every record tied to it (prices, financials,
+    warrants, drills, releases, grades, financings, promotions, watchlist
+    entries). For mis-resolved tickers and delisted names."""
+    from sqlalchemy import delete as _delete
+    t = body.ticker.upper().strip()
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == t)).scalar_one_or_none()
+    if not c:
+        return {"ok": False, "error": f"{t} not tracked"}
+    removed: dict = {}
+    for cls in (models.DailyPrice, models.FinancialSnapshot,
+                models.WarrantTranche, models.DrillProgram,
+                models.DrillResult, models.PressRelease, models.InsiderBuy,
+                models.DilutionGrade, models.SharesHistory,
+                models.Financing, models.Promotion):
+        if hasattr(cls, "company_id"):
+            res = db.execute(_delete(cls).where(cls.company_id == c.id))
+            removed[cls.__tablename__] = res.rowcount
+    res = db.execute(_delete(models.WatchlistItem).where(
+        models.WatchlistItem.ticker == t))
+    removed["watchlist_items"] = res.rowcount
+    name = c.name
+    db.delete(c)
+    db.commit()
+    return {"ok": True, "deleted": t, "name": name, "removed_rows": removed}
