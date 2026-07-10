@@ -14,7 +14,7 @@ export default function ConversionBand({ context }: { context: string }) {
       </p>
       <p className="mt-4">
         <span className="text-ash line-through mr-2">$725/yr</span>
-        <span className="font-display text-4xl">$99.99</span>
+        <span className="font-display text-4xl">$97.99</span>
         <span className="text-ash">/year</span>
         <span className="text-oxide text-sm ml-3">founding price - locks in for life</span>
       </p>
