@@ -67,15 +67,15 @@ export default function Pricing() {
             Subscribe &rarr;
           </a>
         ) : (
-          <a href="/dashboard"
-             className="inline-block mt-6 bg-assay text-shale font-display tracking-wide font-semibold text-lg px-10 py-3 rounded-sm hover:opacity-90">
-            {loaded ? "Start with the free beta \u2192" : "Loading\u2026"}
-          </a>
+          <span
+             className="inline-block mt-6 bg-assay/40 text-shale font-display tracking-wide font-semibold text-lg px-10 py-3 rounded-sm cursor-default">
+            {loaded ? "Checkout opens shortly" : "Loading\u2026"}
+          </span>
         )}
         <p className="text-ash text-xs mt-3">
           {checkout
             ? "Secure checkout by Stripe. Cancel anytime."
-            : "Paid checkout opens shortly - beta members lock founding pricing."}
+            : "Secure Stripe checkout is being connected. Members log in above."}
         </p>
       </div>
 
