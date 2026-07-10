@@ -1,17 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getWatchlist, setWatchlist } from "./SpotlightFooter";
+import { fetchWatchlist, removeFromWatchlist } from "./watchlistClient";
 
 export default function WatchlistBar() {
   const [list, setList] = useState<string[]>([]);
-  useEffect(() => { setList(getWatchlist()); }, []);
+  useEffect(() => { fetchWatchlist().then(setList); }, []);
   if (list.length === 0) return null;
 
-  const remove = (t: string) => {
-    const next = list.filter((x) => x !== t);
-    setWatchlist(next);
-    setList(next);
-  };
+  const remove = async (t: string) => setList(await removeFromWatchlist(t));
 
   return (
     <div className="flex items-center gap-2 flex-wrap mb-4">
