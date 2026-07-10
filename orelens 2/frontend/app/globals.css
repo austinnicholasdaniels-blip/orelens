@@ -89,3 +89,5 @@ a.bg-assay:hover, button.bg-assay:hover {
 @media (prefers-reduced-motion: reduce) {
   .promo-shimmer::after, .promo-pulse, .promo-arrow { animation: none; }
 }
+
+.promo-shimmer:hover { filter: brightness(1.25); }
