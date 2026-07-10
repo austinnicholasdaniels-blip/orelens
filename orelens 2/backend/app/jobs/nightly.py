@@ -159,8 +159,14 @@ async def sync_newswires(db: Session) -> dict:
     else:
         wire_items = ingest.fetch_wire_items()
     stored = 0
+    seen_urls: set[str] = set()
     for item in wire_items:
-        if db.execute(select(PressRelease).where(PressRelease.url == item["url"])).scalar_one_or_none():
+        url = (item.get("url") or "")[:400]
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        if db.execute(select(PressRelease).where(
+                PressRelease.url == url)).scalar_one_or_none():
             continue
         text = f"{item['headline']} {item['summary']}"
         # only match a ticker inside a real exchange parenthetical, e.g.
@@ -178,11 +184,16 @@ async def sync_newswires(db: Session) -> dict:
 
         pr = PressRelease(
             company_id=company_id, published=item["published"],
-            headline=item["headline"][:400], url=item["url"][:400],
+            headline=item["headline"][:400], url=url,
             wire=item["wire"], body=item["summary"],
             is_drill_start=drill_parser.is_drill_start(text),
         )
-        db.add(pr)
+        try:
+            with db.begin_nested():   # savepoint: a dupe can't abort the run
+                db.add(pr)
+                db.flush()
+        except Exception:  # noqa: BLE001
+            continue
         stored += 1
 
         if company_id:
@@ -304,16 +315,37 @@ async def run_sweeps(db: Session) -> dict:
 async def run_nightly() -> dict:
     started = datetime.utcnow()
     db = SessionLocal()
+    errors: dict = {}
+    wire_stats: dict = {}
+    sweep_stats: dict = {}
     try:
-        await sync_prices(db)
-        await sync_filings(db)
-        wire_stats = await sync_newswires(db)
-        sweep_stats = await run_sweeps(db)
-        run_grades(db)
+        for name, step in (("prices", sync_prices), ("filings", sync_filings)):
+            try:
+                await step(db)
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                errors[name] = str(exc)[:200]
+        try:
+            wire_stats = await sync_newswires(db)
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            errors["newswires"] = str(exc)[:200]
+        try:
+            sweep_stats = await run_sweeps(db)
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            errors["sweeps"] = str(exc)[:200]
+        try:
+            run_grades(db)
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            errors["grades"] = str(exc)[:200]
     finally:
         db.close()
-    return {"started": started.isoformat(), "finished": datetime.utcnow().isoformat(),
-            "newswire": wire_stats, "sweeps": sweep_stats}
+    return {"started": started.isoformat(),
+            "finished": datetime.utcnow().isoformat(),
+            "newswire": wire_stats, "sweeps": sweep_stats,
+            "errors": errors or None}
 
 
 if __name__ == "__main__":
