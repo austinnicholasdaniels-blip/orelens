@@ -73,6 +73,10 @@ export default function Login() {
         ) : (
           <>
             <p className="text-ash text-sm">Code sent to <span className="text-bone">{email}</span></p>
+            <p className="bg-assay/15 border border-assay rounded-sm px-3 py-2 text-assay text-sm font-semibold text-center">
+              Don&apos;t see it? Check your SPAM / junk folder - login codes
+              sometimes land there.
+            </p>
             <p className="bg-assay/15 border border-assay text-assay text-sm font-semibold rounded-sm px-3 py-2 text-center">
               {"\u26a0"} Don&apos;t see it? Check your SPAM or junk folder - login
               codes sometimes land there.
