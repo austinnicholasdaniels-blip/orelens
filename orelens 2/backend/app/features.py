@@ -3596,3 +3596,102 @@ def admin_peek_code(email: str, db: Session = Depends(get_db)):
         .order_by(_desc(models.LoginCode.id)).limit(1)).scalar_one_or_none()
     return {"email": email, "live_code_exists": bool(row),
             "expires": row.expires.isoformat() if row else None}
+
+
+# ============================ MEMBER WATCHLIST ==============================
+def _member_from_token(db, token: str):
+    email = _verify_token(token or "")
+    if not email:
+        return None
+    member = db.execute(select(models.Member).where(
+        models.Member.email == email)).scalar_one_or_none()
+    return member if (member and member.active) else None
+
+
+def _watchlist_payload(db, member) -> dict:
+    rows = db.execute(select(models.WatchlistItem).where(
+        models.WatchlistItem.member_id == member.id)
+        .order_by(models.WatchlistItem.created)).scalars().all()
+    items = []
+    for r in rows:
+        c = db.execute(select(models.Company).where(
+            models.Company.ticker == r.ticker)).scalar_one_or_none()
+        px = None
+        if c:
+            last = db.execute(select(models.DailyPrice).where(
+                models.DailyPrice.company_id == c.id)
+                .order_by(_desc(models.DailyPrice.day)).limit(1)
+            ).scalar_one_or_none()
+            px = last.close if last else None
+        items.append({"ticker": r.ticker,
+                      "name": c.name if c else None,
+                      "exchange": c.exchange if c else None,
+                      "close": px,
+                      "grade": _grade_of(db, c.id) if c else None})
+    return {"ok": True, "tickers": [r.ticker for r in rows], "items": items}
+
+
+class WatchBody(BaseModel):
+    token: str
+    ticker: str
+
+
+class WatchSyncBody(BaseModel):
+    token: str
+    tickers: list[str]
+
+
+@router.get("/api/watchlist")
+def watchlist_get(token: str, db: Session = Depends(get_db)):
+    member = _member_from_token(db, token)
+    if not member:
+        return {"ok": False, "error": "not a member session"}
+    return _watchlist_payload(db, member)
+
+
+@router.post("/api/watchlist/add")
+def watchlist_add(body: WatchBody, db: Session = Depends(get_db)):
+    member = _member_from_token(db, body.token)
+    if not member:
+        return {"ok": False, "error": "not a member session"}
+    t = body.ticker.upper().strip()[:10]
+    exists = db.execute(select(models.WatchlistItem).where(
+        models.WatchlistItem.member_id == member.id,
+        models.WatchlistItem.ticker == t)).scalar_one_or_none()
+    if not exists and t:
+        db.add(models.WatchlistItem(member_id=member.id, ticker=t))
+        db.commit()
+    return _watchlist_payload(db, member)
+
+
+@router.post("/api/watchlist/remove")
+def watchlist_remove(body: WatchBody, db: Session = Depends(get_db)):
+    member = _member_from_token(db, body.token)
+    if not member:
+        return {"ok": False, "error": "not a member session"}
+    t = body.ticker.upper().strip()
+    row = db.execute(select(models.WatchlistItem).where(
+        models.WatchlistItem.member_id == member.id,
+        models.WatchlistItem.ticker == t)).scalar_one_or_none()
+    if row:
+        db.delete(row)
+        db.commit()
+    return _watchlist_payload(db, member)
+
+
+@router.post("/api/watchlist/sync")
+def watchlist_sync(body: WatchSyncBody, db: Session = Depends(get_db)):
+    """Merge a device's cookie watchlist into the member's server list -
+    called once right after login so nothing saved pre-login is lost."""
+    member = _member_from_token(db, body.token)
+    if not member:
+        return {"ok": False, "error": "not a member session"}
+    have = {r.ticker for r in db.execute(select(models.WatchlistItem).where(
+        models.WatchlistItem.member_id == member.id)).scalars()}
+    for t in body.tickers[:100]:
+        t = t.upper().strip()[:10]
+        if t and t not in have:
+            db.add(models.WatchlistItem(member_id=member.id, ticker=t))
+            have.add(t)
+    db.commit()
+    return _watchlist_payload(db, member)
