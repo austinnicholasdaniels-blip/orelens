@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     session_secret: str = ""       # signs login session tokens (SESSION_SECRET)
     anthropic_api_key: str = ""    # powers The Assayer (ANTHROPIC_API_KEY)
     assayer_model: str = "claude-sonnet-4-6"
+    training_video_url: str = ""   # YouTube/Vimeo embed for /training (TRAINING_VIDEO_URL)
     digest_from: str = "OreLens <login@getorelens.com>"
     eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
     admin_key: str = ""            # locks /api/admin/* when set (ADMIN_KEY env)
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     session_secret: str = ""       # signs login session tokens (SESSION_SECRET)
     anthropic_api_key: str = ""    # powers The Assayer (ANTHROPIC_API_KEY)
     assayer_model: str = "claude-sonnet-4-6"
+    training_video_url: str = ""   # YouTube/Vimeo embed for /training (TRAINING_VIDEO_URL)
     digest_from: str = "OreLens <login@getorelens.com>"
     cost_per_meter_default: float = 250.0  # CAD, all-in diamond drilling default
     class Config:
