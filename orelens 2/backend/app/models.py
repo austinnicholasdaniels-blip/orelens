@@ -224,3 +224,25 @@ class Spotlight(Base):
     story_website: Mapped[str | None] = mapped_column(String(300), nullable=True)
     story_milestones: Mapped[str | None] = mapped_column(Text, nullable=True)
     story_news: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Member(Base):
+    """A paying subscriber. Created by the Stripe webhook on checkout, or
+    manually by admin. Login is passwordless: email + one-time code."""
+    __tablename__ = "members"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source: Mapped[str] = mapped_column(String(30), default="stripe")
+    created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LoginCode(Base):
+    """One-time 6-digit login codes, hashed at rest, 10-minute expiry."""
+    __tablename__ = "login_codes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires: Mapped[datetime] = mapped_column(DateTime)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
