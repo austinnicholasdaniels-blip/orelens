@@ -2048,11 +2048,11 @@ US_MINERS = [
     ("MP","NYSE","MP Materials","Rare Earths"),("TMC","NASDAQ","TMC the metals company","Nickel"),
     ("VALE","NYSE","Vale","Iron Ore"),("RIO","NYSE","Rio Tinto","Diversified"),
     ("BHP","NYSE","BHP Group","Diversified"),("TECK","NYSE","Teck Resources","Diversified"),
-    ("NGD","NYSE","New Gold","Gold"),("EQX","NYSE","Equinox Gold","Gold"),
+    ("EQX","NYSE","Equinox Gold","Gold"),
     ("SSRM","NASDAQ","SSR Mining","Gold"),("ORLA","NYSE","Orla Mining","Gold"),
     ("SKE","NYSE","Skeena Resources","Gold"),("ITRG","NYSE","Integra Resources","Gold"),
     ("IDR","NYSE","Idaho Strategic Resources","Gold"),("PPTA","NASDAQ","Perpetua Resources","Gold"),
-    ("VZLA","NYSE","Vizsla Silver","Silver"),("DV","TSXV","Dolly Varden Silver","Silver"),
+    ("VZLA","NYSE","Vizsla Silver","Silver"),
     ("SEA","TSX","Seabridge Gold","Gold"),("MND","TSX","Mandalay Resources","Gold"),
     ("KNT","TSXV","K92 Mining","Gold"),("ARIS","TSX","Aris Mining","Gold"),
     ("LUG","TSX","Lundin Gold","Gold"),("MOZ","TSX","Marathon Gold","Gold"),
@@ -3916,3 +3916,45 @@ def delete_company(body: DeleteCompanyBody, db: Session = Depends(get_db)):
     db.delete(c)
     db.commit()
     return {"ok": True, "deleted": t, "name": name, "removed_rows": removed}
+
+
+class RemoveCompanyBody(BaseModel):
+    ticker: str
+
+
+@router.post("/api/admin/remove-company")
+def remove_company(body: RemoveCompanyBody, db: Session = Depends(get_db)):
+    """Delete a company and every trace of it (prices, shares history,
+    financings, releases, promotions, grades, watchlist rows). For
+    delistings, symbol collisions, and misclassified entries."""
+    t = body.ticker.upper().strip()
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == t)).scalar_one_or_none()
+    if not c:
+        return {"removed": False, "error": f"{t} not tracked"}
+    counts: dict = {}
+    import sqlalchemy as _sa
+    for model in (models.DailyPrice, models.SharesHistory, models.Financing,
+                  models.PressRelease, models.Promotion):
+        if hasattr(model, "company_id"):
+            res = db.execute(_sa.delete(model).where(
+                model.company_id == c.id))
+            counts[model.__tablename__] = res.rowcount
+    # any other model with a company_id column (grades, filings, etc.)
+    for mapper in models.Base.registry.mappers:
+        model = mapper.class_
+        if model in (models.DailyPrice, models.SharesHistory, models.Financing,
+                     models.PressRelease, models.Promotion, models.Company):
+            continue
+        if hasattr(model, "company_id"):
+            res = db.execute(_sa.delete(model).where(
+                model.company_id == c.id))
+            counts[model.__tablename__] = res.rowcount
+    # watchlist rows are keyed by ticker, not company_id
+    res = db.execute(_sa.delete(models.WatchlistItem).where(
+        models.WatchlistItem.ticker == t))
+    counts["watchlist_items"] = res.rowcount
+    db.delete(c)
+    db.commit()
+    return {"removed": True, "ticker": t, "name": c.name,
+            "rows_deleted": counts}
