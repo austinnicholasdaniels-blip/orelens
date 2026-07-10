@@ -219,75 +219,79 @@ function DashboardInner() {
     <>
       <WatchlistBar />
       <div>
-      <div className="relative mb-5">
-        <input value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Search any mining stock - TSX, TSXV, CSE, NYSE, NASDAQ, ASX..."
-          className="w-full bg-tray border border-seam rounded-sm px-4 py-2.5 text-sm placeholder:text-ash focus:border-assay focus:outline-none" />
-        {q.trim().length >= 2 && (
-          <div className="absolute z-10 mt-1 w-full bg-tray border border-seam rounded-sm shadow-lg">
-            {hits.map((h) => (
-              <a key={h.ticker} href={`/ticker/${h.ticker}`}
-                 className="flex items-baseline gap-3 px-4 py-2 hover:bg-shale text-sm">
-                <span className="font-mono text-assay">{h.ticker}</span>
-                <span>{h.name}</span>
-                <span className="text-ash text-xs ml-auto">{h.exchange} - {h.commodity}</span>
-              </a>
-            ))}
-            {hits.length === 0 && (
-              <button onClick={addTicker} disabled={adding}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-shale">
-                {adding ? "Fetching market data..." :
-                  `Not tracked yet - add "${q.trim().toUpperCase()}" and pull its data now`}
-              </button>
-            )}
-          </div>
-        )}
+      <div className="flex flex-col md:flex-row gap-2 mb-3">
+        <div className="relative flex-1">
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search any mining stock - TSX, TSXV, CSE, NYSE, NASDAQ, ASX..."
+            className="w-full bg-tray border border-seam rounded-sm px-4 py-2.5 text-sm placeholder:text-ash focus:border-assay focus:outline-none" />
+          {q.trim().length >= 2 && (
+            <div className="absolute z-10 mt-1 w-full bg-tray border border-seam rounded-sm shadow-lg">
+              {hits.map((h) => (
+                <a key={h.ticker} href={`/ticker/${h.ticker}`}
+                   className="flex items-baseline gap-3 px-4 py-2 hover:bg-shale text-sm">
+                  <span className="font-mono text-assay">{h.ticker}</span>
+                  <span>{h.name}</span>
+                  <span className="text-ash text-xs ml-auto">{h.exchange} - {h.commodity}</span>
+                </a>
+              ))}
+              {hits.length === 0 && (
+                <button onClick={addTicker} disabled={adding}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-shale">
+                  {adding ? "Fetching market data..." :
+                    `Not tracked yet - add "${q.trim().toUpperCase()}" and pull its data now`}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <select value={commodity} onChange={(e) => setCommodity(e.target.value)}
+            className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
+            <option value="">All commodities</option>
+            {COMMODITIES.map((c) => <option key={c}>{c}</option>)}
+          </select>
+          <select value={tier} onChange={(e) => setTier(e.target.value)}
+            className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
+            <option value="">All jurisdictions</option>
+            {TIERS.map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </div>
       </div>
 
-      <div className="mb-5 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="bg-tray/40 border border-seam rounded-sm mb-5 grid md:grid-cols-[auto_1fr_1.35fr]">
+        <div className="p-3 flex items-center">
           <button onClick={() => setTab("all-stocks")}
-            className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
-              tab === "all-stocks" ? "border-assay text-assay bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+            className={`font-display tracking-wide px-3 py-1 rounded-sm border ${
+              tab === "all-stocks" ? "border-assay text-assay bg-shale" : "border-seam text-ash hover:text-bone"}`}>
             All Stocks
           </button>
-          <div className="ml-auto flex gap-2">
-            <select value={commodity} onChange={(e) => setCommodity(e.target.value)}
-              className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
-              <option value="">All commodities</option>
-              {COMMODITIES.map((c) => <option key={c}>{c}</option>)}
-            </select>
-            <select value={tier} onChange={(e) => setTier(e.target.value)}
-              className="bg-tray border border-seam rounded-sm text-sm px-2 py-1.5">
-              <option value="">All jurisdictions</option>
-              {TIERS.map((t) => <option key={t}>{t}</option>)}
-            </select>
-          </div>
         </div>
-        <div className="grid md:grid-cols-2 gap-3">
-          <div className="border border-oxide/40 rounded-sm p-3">
-            <p className="text-oxide text-[10px] uppercase tracking-[0.3em] mb-2">Bullish Scanners</p>
-            <div className="flex flex-wrap gap-2">
+        <div className="p-3 border-t md:border-t-0 md:border-l border-seam">
+          <p className="text-oxide text-[10px] uppercase tracking-[0.3em] mb-2 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-oxide inline-block" />Bullish Scanners
+          </p>
+          <div className="flex flex-wrap gap-1.5">
               {BULLISH_TABS.map((t) => (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
-                    tab === t.id ? "border-oxide text-oxide bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+                  className={`font-display tracking-wide px-3 py-1 rounded-sm border ${
+                    tab === t.id ? "border-oxide text-oxide bg-shale" : "border-seam text-ash hover:text-bone"}`}>
                   {t.label}
                 </button>
               ))}
-            </div>
           </div>
-          <div className="border border-hazard/40 rounded-sm p-3">
-            <p className="text-hazard text-[10px] uppercase tracking-[0.3em] mb-2">Risk Factors</p>
-            <div className="flex flex-wrap gap-2">
+        </div>
+        <div className="p-3 border-t md:border-t-0 md:border-l border-seam">
+          <p className="text-hazard text-[10px] uppercase tracking-[0.3em] mb-2 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-hazard inline-block" />Risk Factors
+          </p>
+          <div className="flex flex-wrap gap-1.5">
               {RISK_TABS.map((t) => (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`font-display text-lg tracking-wide px-4 py-1.5 rounded-sm border ${
-                    tab === t.id ? "border-hazard text-hazard bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+                  className={`font-display tracking-wide px-3 py-1 rounded-sm border ${
+                    tab === t.id ? "border-hazard text-hazard bg-shale" : "border-seam text-ash hover:text-bone"}`}>
                   {t.label}
                 </button>
               ))}
-            </div>
           </div>
         </div>
       </div>
