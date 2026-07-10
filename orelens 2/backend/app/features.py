@@ -3695,3 +3695,184 @@ def watchlist_sync(body: WatchSyncBody, db: Session = Depends(get_db)):
             have.add(t)
     db.commit()
     return _watchlist_payload(db, member)
+
+
+# ============================ THE ASSAYER ===================================
+# Bring your thesis. Leave with the truth.
+
+ASSAYER_DAILY_CAP = 10
+
+
+def _assayer_context(db, ticker: str) -> dict:
+    """Everything OreLens knows about this company, packed for the model."""
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == ticker)).scalar_one_or_none()
+    if not c:
+        return {"tracked": False}
+    ctx: dict = {"tracked": True, "name": c.name, "exchange": c.exchange,
+                 "commodity": c.commodity, "jurisdiction": c.jurisdiction,
+                 "shares_outstanding": c.shares_outstanding,
+                 "dilution_grade": _grade_of(db, c.id)}
+    last = db.execute(select(models.DailyPrice).where(
+        models.DailyPrice.company_id == c.id)
+        .order_by(_desc(models.DailyPrice.day)).limit(1)).scalar_one_or_none()
+    if last:
+        ctx["latest_close"] = last.close
+        ctx["priced_as_of"] = last.day.isoformat()
+    br = _burn_runway(db, c.id)
+    if br:
+        ctx["cash"] = br["fin"].cash
+        ctx["cash_as_of"] = br["fin"].as_of.isoformat()
+        ctx["monthly_burn"] = br["burn"]
+        ctx["burn_source"] = br["burn_source"]
+        ctx["runway_months"] = br["runway"] and round(br["runway"], 1)
+        ctx["adjusted_runway_months"] = br["adj_runway"] and round(br["adj_runway"], 1)
+        if br["closed_amt"]:
+            ctx["raise_closed_recently"] = {"amount": br["closed_amt"],
+                                            "date": str(br["closed_date"])}
+        if br["announced_amt"] or br["announced_date"]:
+            ctx["raise_announced_not_closed"] = {
+                "amount": br["announced_amt"] or None,
+                "date": str(br["announced_date"])}
+    # share growth 1y
+    hist = db.execute(select(models.SharesHistory).where(
+        models.SharesHistory.company_id == c.id)
+        .order_by(models.SharesHistory.as_of)).scalars().all()
+    if len(hist) >= 2:
+        yr_ago = [h for h in hist if (hist[-1].as_of - h.as_of).days >= 330]
+        if yr_ago and yr_ago[-1].shares:
+            ctx["share_growth_1y_pct"] = round(
+                (hist[-1].shares / yr_ago[-1].shares - 1) * 100, 1)
+    # active/recent promotions
+    promos = db.execute(select(models.Promotion).where(
+        models.Promotion.company_id == c.id)
+        .order_by(_desc(models.Promotion.announced)).limit(3)).scalars().all()
+    if promos:
+        ctx["paid_promotions"] = [
+            {"announced": str(p.announced), "firm": p.firm, "paid": p.amount,
+             "ends": str(p.ends) if p.ends else None} for p in promos]
+    # upcoming unlocks
+    from datetime import timedelta as _td
+    unlocks = db.execute(select(models.Financing).where(
+        models.Financing.company_id == c.id,
+        models.Financing.hold_expiry.is_not(None),
+        models.Financing.hold_expiry >= date.today(),
+        models.Financing.hold_expiry <= date.today() + _td(days=120))
+        ).scalars().all()
+    if unlocks:
+        ctx["upcoming_unlocks"] = [
+            {"free_trades": str(u.hold_expiry), "amount": u.amount}
+            for u in unlocks]
+    return ctx
+
+
+ASSAYER_SYSTEM = """You are The Assayer - the trade-idea grader inside OreLens, \
+the dilution-intelligence terminal for mining stocks. A member brings you their \
+trade idea; you tell them what the sample is really worth. Voice: a sharp, \
+fair trading-desk mentor. Direct, specific, zero hype, zero filler. You are a \
+research tool, never an advisor - grade the QUALITY OF THE IDEA AND ITS \
+REASONING, don't tell them to buy or sell.
+
+You receive PLATFORM DATA computed from filings and licensed market data. \
+Weigh it heavily - especially dilution grade, runway, announced raises, paid \
+promotions, and upcoming unlocks. If platform data contradicts the thesis, \
+say so plainly. If the company isn't tracked, grade the thesis on its own \
+logic and say the dilution picture is unverified.
+
+Respond with ONLY a JSON object, no markdown fences, in exactly this shape:
+{"grade": "A"|"B"|"C"|"D"|"F",
+ "score": 0-100,
+ "verdict": "one punchy sentence",
+ "dilution_risk": "2-4 sentences on THIS company's dilution/runway/unlock picture using the platform data",
+ "strengths": ["...", "..."],
+ "risks": ["...", "..."],
+ "checklist": [{"item": "Runway vs. thesis timeframe", "status": "pass"|"warn"|"fail"},
+               {"item": "Dilution overhang", "status": ...},
+               {"item": "Promotion activity", "status": ...},
+               {"item": "Entry vs. recent price", "status": ...},
+               {"item": "Thesis specificity", "status": ...}],
+ "feedback": "3-5 sentences of mentor feedback on the thesis itself - what's sharp, what's missing, what would make it institutional-grade"}"""
+
+
+class AssayBody(BaseModel):
+    token: str
+    ticker: str
+    exchange: str
+    entry_price: float
+    thesis: str
+
+
+@router.post("/api/assayer")
+def assay_trade(body: AssayBody, db: Session = Depends(get_db)):
+    """The Assayer: grades a member's trade idea against the platform's
+    dilution intelligence. Members only; capped per day."""
+    import json as _json
+    import httpx as _hx
+    from datetime import datetime as _dt, timedelta as _td
+    from .config import settings as _s
+    member = _member_from_token(db, body.token)
+    if not member:
+        return {"ok": False, "error": "Log in to use The Assayer."}
+    if not _s.anthropic_api_key:
+        return {"ok": False, "error": "The Assayer is being connected - "
+                "ANTHROPIC_API_KEY not configured yet."}
+    today_count = len(db.execute(select(models.TradeIdea).where(
+        models.TradeIdea.member_id == member.id,
+        models.TradeIdea.created >= _dt.utcnow() - _td(days=1))
+        ).scalars().all())
+    if today_count >= ASSAYER_DAILY_CAP:
+        return {"ok": False, "error": f"Daily limit reached "
+                f"({ASSAYER_DAILY_CAP} assays per day). Back tomorrow."}
+    ticker = body.ticker.upper().strip()[:10]
+    thesis = body.thesis.strip()[:4000]
+    if not ticker or len(thesis) < 20:
+        return {"ok": False, "error": "Give The Assayer a ticker and a real "
+                "thesis (a few sentences minimum)."}
+    ctx = _assayer_context(db, ticker)
+    user_msg = _json.dumps({
+        "trade_idea": {"ticker": ticker, "exchange": body.exchange,
+                       "entry_price": body.entry_price, "thesis": thesis},
+        "platform_data": ctx,
+        "today": date.today().isoformat()})
+    try:
+        with _hx.Client(timeout=60) as client:
+            r = client.post("https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": _s.anthropic_api_key,
+                         "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": _s.assayer_model, "max_tokens": 1400,
+                      "system": ASSAYER_SYSTEM,
+                      "messages": [{"role": "user", "content": user_msg}]})
+            data = r.json()
+        text = "".join(b.get("text", "") for b in data.get("content", [])
+                       if b.get("type") == "text")
+        text = text.replace("```json", "").replace("```", "").strip()
+        result = _json.loads(text)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"The assay furnace misfired - try "
+                f"again in a moment. ({str(exc)[:80]})"}
+    db.add(models.TradeIdea(member_id=member.id, ticker=ticker,
+                            exchange=body.exchange[:10],
+                            entry_price=body.entry_price, thesis=thesis,
+                            grade=str(result.get("grade", ""))[:2],
+                            response_json=_json.dumps(result)[:20000]))
+    db.commit()
+    return {"ok": True, "ticker": ticker, "tracked": ctx.get("tracked", False),
+            "platform_context": ctx, "assay": result,
+            "assays_left_today": ASSAYER_DAILY_CAP - today_count - 1}
+
+
+@router.get("/api/assayer/history")
+def assay_history(token: str, db: Session = Depends(get_db)):
+    import json as _json
+    member = _member_from_token(db, token)
+    if not member:
+        return {"ok": False, "error": "not a member session"}
+    rows = db.execute(select(models.TradeIdea).where(
+        models.TradeIdea.member_id == member.id)
+        .order_by(_desc(models.TradeIdea.created)).limit(25)).scalars().all()
+    return {"ok": True, "ideas": [
+        {"ticker": r.ticker, "exchange": r.exchange, "entry": r.entry_price,
+         "grade": r.grade, "when": r.created.isoformat(),
+         "assay": _json.loads(r.response_json) if r.response_json else None}
+        for r in rows]}
