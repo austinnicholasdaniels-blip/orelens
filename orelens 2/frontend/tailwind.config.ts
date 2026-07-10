@@ -7,14 +7,14 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        shale: "#101312",
-        tray: "#1A1E1C",
-        seam: "#2A302D",
-        bone: "#E9E4D8",
-        ash: "#8D958F",
-        assay: "#E8B44A",
-        oxide: "#58B09C",
-        hazard: "#D4574E",
+        shale: "#131110",
+        tray: "#1D1915",
+        seam: "#332D25",
+        bone: "#F1EADB",
+        ash: "#A79E8F",
+        assay: "#E3B356",
+        oxide: "#5FBCA4",
+        hazard: "#DD5F55",
       },
       fontFamily: {
         display: ["'Barlow Condensed'", "ui-sans-serif", "sans-serif"],
