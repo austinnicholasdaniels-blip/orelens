@@ -84,7 +84,7 @@ export default function Pricing() {
         <div className="grid sm:grid-cols-2 gap-3">
           {FEATURES.map((f) => (
             <div key={f} className="flex gap-2.5 bg-tray border border-seam rounded-sm px-4 py-3">
-              <span className="text-oxide">\u2713</span>
+              <span className="text-oxide">{"\u2713"}</span>
               <span className="text-sm text-bone/90">{f}</span>
             </div>
           ))}
