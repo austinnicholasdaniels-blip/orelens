@@ -255,3 +255,17 @@ class WatchlistItem(Base):
     member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class TradeIdea(Base):
+    """A member's trade idea submitted to The Assayer, with its verdict."""
+    __tablename__ = "trade_ideas"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
+    ticker: Mapped[str] = mapped_column(String(10))
+    exchange: Mapped[str] = mapped_column(String(10))
+    entry_price: Mapped[float] = mapped_column(Float)
+    thesis: Mapped[str] = mapped_column(Text)
+    grade: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
