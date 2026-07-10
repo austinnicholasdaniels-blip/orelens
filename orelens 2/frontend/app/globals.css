@@ -28,3 +28,23 @@ table.core-tray tr:hover td { @apply bg-tray; }
   }
   table.core-tray tr:hover td:first-child { background: #1a1e1c; }
 }
+
+/* Minted gold: every primary CTA renders as bullion, not flat mustard.
+   Targets buttons/links only - gold badges (spans) stay flat. */
+a.bg-assay, button.bg-assay {
+  background-image: linear-gradient(180deg, #F0CB78 0%, #E3B356 45%, #C6923A 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 244, 214, 0.55),
+              0 2px 10px rgba(227, 179, 86, 0.22);
+  text-shadow: 0 1px 0 rgba(255, 248, 226, 0.35);
+}
+a.bg-assay:hover, button.bg-assay:hover {
+  filter: brightness(1.06);
+  opacity: 1 !important;
+}
+
+/* Hero glow: a soft gold light source so the page feels lit, not void */
+.hero-glow {
+  background: radial-gradient(ellipse 65% 55% at 50% -5%,
+              rgba(227, 179, 86, 0.12), rgba(227, 179, 86, 0.04) 45%,
+              transparent 72%);
+}
