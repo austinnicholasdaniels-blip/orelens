@@ -3385,7 +3385,7 @@ def billing_config():
     STRIPE_PAYMENT_LINK env var is set in Render - no deploy needed."""
     from .config import settings as _s
     return {"checkout_url": _s.stripe_payment_link or None,
-            "price_year": 99.99, "post_launch_price_year": 725,
+            "price_year": 97.99, "post_launch_price_year": 725,
             "plan": "Founding Member - Annual"}
 
 
