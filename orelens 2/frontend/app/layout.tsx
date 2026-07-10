@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import SpotlightFooter from "@/components/SpotlightFooter";
 import NavLinks from "@/components/NavLinks";
+import PromoBar from "@/components/PromoBar";
 
 export const metadata: Metadata = {
   title: "OreLens — Dilution & Drill Intelligence",
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
+        <PromoBar />
         <header className="border-b border-seam px-6 py-4 flex items-baseline gap-4">
           <a href="/" className="font-display text-2xl tracking-wide text-assay">ORELENS</a>
           <span className="text-xs text-ash uppercase tracking-widest hidden sm:inline">
