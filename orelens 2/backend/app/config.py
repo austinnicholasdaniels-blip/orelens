@@ -18,11 +18,15 @@ class Settings(BaseSettings):
     admin_key: str = ""            # locks /api/admin/* when set (ADMIN_KEY env)
     resend_api_key: str = ""       # enables digest email sending (RESEND_API_KEY)
     stripe_payment_link: str = ""  # Stripe Payment Link URL (STRIPE_PAYMENT_LINK)
+    stripe_webhook_secret: str = ""  # Stripe webhook signing secret (STRIPE_WEBHOOK_SECRET)
+    session_secret: str = ""       # signs login session tokens (SESSION_SECRET)
     digest_from: str = "OreLens <digest@orelens.com>"
     eodhd_api_key: str = ""        # EODHD All-In-One: prices, fundamentals, news
     admin_key: str = ""            # locks /api/admin/* when set (ADMIN_KEY env)
     resend_api_key: str = ""       # enables digest email sending (RESEND_API_KEY)
     stripe_payment_link: str = ""  # Stripe Payment Link URL (STRIPE_PAYMENT_LINK)
+    stripe_webhook_secret: str = ""  # Stripe webhook signing secret (STRIPE_WEBHOOK_SECRET)
+    session_secret: str = ""       # signs login session tokens (SESSION_SECRET)
     digest_from: str = "OreLens <digest@orelens.com>"
     cost_per_meter_default: float = 250.0  # CAD, all-in diamond drilling default
     class Config:
