@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import ConversionBand from "@/components/ConversionBand";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type Row = Record<string, any>;
@@ -106,6 +107,7 @@ export default function PromotionScoreboard() {
         Returns measured from the closest trading day to each disclosure. Research
         tool, not investment advice. Source URLs available on each company page.
       </p>
+      <ConversionBand context="Track every promotion the moment it's disclosed - in the full terminal." />
     </div>
   );
 }
