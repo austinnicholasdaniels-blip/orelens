@@ -337,7 +337,36 @@ def _dilution_stats(db, company, shares_hist, cash_snaps):
     return out
 
 
+_NIGHTLY_STATUS: dict = {"state": "idle"}
+
+
+def _run_nightly_bg():
+    import asyncio
+    from datetime import datetime as _dt
+    _NIGHTLY_STATUS.clear()
+    _NIGHTLY_STATUS.update({"state": "running",
+                            "started": _dt.utcnow().isoformat()})
+    try:
+        result = asyncio.run(run_nightly())
+        _NIGHTLY_STATUS.update({"state": "done", "result": result,
+                                "finished": _dt.utcnow().isoformat()})
+    except Exception as exc:  # noqa: BLE001
+        _NIGHTLY_STATUS.update({"state": "error", "error": str(exc)[:300]})
+
+
 @app.post("/api/jobs/nightly")
 async def trigger_nightly():
-    """External cron / GitHub Action entry point."""
-    return await run_nightly()
+    """External cron entry point - runs the full pipeline in the background
+    (prices, filings, news, financings, promotions, grades).
+    Poll GET /api/jobs/nightly-status."""
+    import threading
+    if _NIGHTLY_STATUS.get("state") == "running":
+        return {"started": False, "progress": _NIGHTLY_STATUS}
+    threading.Thread(target=_run_nightly_bg, daemon=True).start()
+    return {"started": True,
+            "check_progress": "GET /api/jobs/nightly-status"}
+
+
+@app.get("/api/jobs/nightly-status")
+def nightly_status():
+    return _NIGHTLY_STATUS
