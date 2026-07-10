@@ -34,7 +34,7 @@ export default function BetaGate({ children }: { children: React.ReactNode }) {
           registry - refreshed nightly. There is no second OreLens.
         </p>
         <p className="mt-5">
-          <span className="font-display text-3xl">$99.99</span>
+          <span className="font-display text-3xl">$97.99</span>
           <span className="text-ash">/year</span>
         </p>
         <p className="text-oxide text-sm mt-1">
