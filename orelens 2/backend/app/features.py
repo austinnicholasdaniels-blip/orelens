@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select, or_
 from starlette.concurrency import run_in_threadpool
@@ -3380,3 +3380,219 @@ def billing_config():
     return {"checkout_url": _s.stripe_payment_link or None,
             "price_year": 99.99, "post_launch_price_year": 725,
             "plan": "Founding Member - Annual"}
+
+
+# ============================ MEMBER AUTH (passwordless) ====================
+import base64 as _b64
+import hashlib as _hashlib
+import hmac as _hmac
+import secrets as _secrets
+
+
+def _auth_secret() -> str:
+    from .config import settings as _s
+    return _s.session_secret or _s.admin_key or "orelens-dev-secret"
+
+
+def _sign_token(email: str, days: int = 365) -> str:
+    import json as _json
+    from datetime import datetime as _dt, timedelta as _td
+    payload = _json.dumps({"email": email.lower(),
+                           "exp": (_dt.utcnow() + _td(days=days)).timestamp()})
+    body = _b64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    sig = _hmac.new(_auth_secret().encode(), body.encode(),
+                    _hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def _verify_token(token: str) -> str | None:
+    import json as _json
+    from datetime import datetime as _dt
+    try:
+        body, sig = token.rsplit(".", 1)
+        expect = _hmac.new(_auth_secret().encode(), body.encode(),
+                           _hashlib.sha256).hexdigest()
+        if not _hmac.compare_digest(sig, expect):
+            return None
+        pad = body + "=" * (-len(body) % 4)
+        data = _json.loads(_b64.urlsafe_b64decode(pad))
+        if data["exp"] < _dt.utcnow().timestamp():
+            return None
+        return data["email"]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _hash_code(email: str, code: str) -> str:
+    return _hashlib.sha256(f"{email.lower()}:{code}".encode()).hexdigest()
+
+
+class AuthEmailBody(BaseModel):
+    email: str
+
+
+class AuthVerifyBody(BaseModel):
+    email: str
+    code: str
+
+
+@router.post("/api/auth/request-code")
+def auth_request_code(body: AuthEmailBody, db: Session = Depends(get_db)):
+    """Step 1: member enters their email; a 6-digit code is emailed to them.
+    Response never reveals whether the email is a member (no enumeration)."""
+    import httpx as _hx
+    from datetime import datetime as _dt, timedelta as _td
+    from .config import settings as _s
+    email = body.email.strip().lower()
+    generic = {"ok": True,
+               "message": "If that email has an active membership, a login "
+                          "code is on its way. It expires in 10 minutes."}
+    member = db.execute(select(models.Member).where(
+        models.Member.email == email,
+        models.Member.active.is_(True))).scalar_one_or_none()
+    if not member:
+        return generic
+    code = f"{_secrets.randbelow(1_000_000):06d}"
+    db.add(models.LoginCode(email=email, code_hash=_hash_code(email, code),
+                            expires=_dt.utcnow() + _td(minutes=10)))
+    db.commit()
+    if _s.resend_api_key:
+        try:
+            with _hx.Client(timeout=15) as client:
+                client.post("https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {_s.resend_api_key}"},
+                    json={"from": _s.digest_from, "to": [email],
+                          "subject": f"{code} is your OreLens login code",
+                          "html": (f"<p>Your OreLens login code:</p>"
+                                   f"<h1 style='letter-spacing:6px'>{code}</h1>"
+                                   f"<p>It expires in 10 minutes. If you didn't "
+                                   f"request this, ignore this email.</p>")})
+        except Exception:  # noqa: BLE001
+            pass
+    return generic
+
+
+@router.post("/api/auth/verify-code")
+def auth_verify_code(body: AuthVerifyBody, db: Session = Depends(get_db)):
+    """Step 2: code checks out -> a year-long signed session token."""
+    from datetime import datetime as _dt
+    email = body.email.strip().lower()
+    code = body.code.strip()
+    row = db.execute(select(models.LoginCode).where(
+        models.LoginCode.email == email,
+        models.LoginCode.used.is_(False),
+        models.LoginCode.expires > _dt.utcnow())
+        .order_by(_desc(models.LoginCode.id)).limit(1)).scalar_one_or_none()
+    if not row or not _hmac.compare_digest(row.code_hash,
+                                           _hash_code(email, code)):
+        return {"ok": False, "error": "Invalid or expired code."}
+    row.used = True
+    db.commit()
+    return {"ok": True, "token": _sign_token(email), "email": email}
+
+
+@router.get("/api/auth/me")
+def auth_me(token: str, db: Session = Depends(get_db)):
+    email = _verify_token(token)
+    if not email:
+        return {"ok": False}
+    member = db.execute(select(models.Member).where(
+        models.Member.email == email)).scalar_one_or_none()
+    if not member or not member.active:
+        return {"ok": False}
+    return {"ok": True, "email": email, "member_since":
+            member.created.date().isoformat()}
+
+
+# ------------------------------------------------ Stripe webhook -----------
+@router.post("/api/stripe-webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe calls this on checkout + cancellation. Verified with the
+    signing secret; creates/deactivates Members automatically."""
+    import json as _json
+    import time as _time
+    from .config import settings as _s
+    raw = await request.body()
+    if not _s.stripe_webhook_secret:
+        return {"error": "STRIPE_WEBHOOK_SECRET not configured"}
+    sig_header = request.headers.get("stripe-signature", "")
+    parts = dict(p.split("=", 1) for p in sig_header.split(",") if "=" in p)
+    t, v1 = parts.get("t", ""), parts.get("v1", "")
+    expect = _hmac.new(_s.stripe_webhook_secret.encode(),
+                       f"{t}.{raw.decode()}".encode(),
+                       _hashlib.sha256).hexdigest()
+    if not v1 or not _hmac.compare_digest(v1, expect) or             abs(_time.time() - float(t or 0)) > 600:
+        return {"error": "signature verification failed"}
+    event = _json.loads(raw)
+    etype = event.get("type", "")
+    obj = (event.get("data") or {}).get("object") or {}
+    if etype == "checkout.session.completed":
+        email = ((obj.get("customer_details") or {}).get("email")
+                 or obj.get("customer_email") or "").lower()
+        if email:
+            member = db.execute(select(models.Member).where(
+                models.Member.email == email)).scalar_one_or_none()
+            if member:
+                member.active = True
+                member.stripe_customer_id = obj.get("customer") or member.stripe_customer_id
+            else:
+                db.add(models.Member(email=email, active=True,
+                                     stripe_customer_id=obj.get("customer"),
+                                     source="stripe"))
+            db.commit()
+            return {"ok": True, "member": email}
+    if etype in ("customer.subscription.deleted",):
+        cust = obj.get("customer")
+        if cust:
+            member = db.execute(select(models.Member).where(
+                models.Member.stripe_customer_id == cust)).scalar_one_or_none()
+            if member:
+                member.active = False
+                db.commit()
+                return {"ok": True, "deactivated": member.email}
+    return {"ok": True, "ignored": etype}
+
+
+# ------------------------------------------------ admin member tools -------
+class AddMemberBody(BaseModel):
+    email: str
+    active: bool = True
+
+
+@router.post("/api/admin/add-member")
+def add_member(body: AddMemberBody, db: Session = Depends(get_db)):
+    """Manual grant/revoke: comps, refunds, support fixes."""
+    email = body.email.strip().lower()
+    member = db.execute(select(models.Member).where(
+        models.Member.email == email)).scalar_one_or_none()
+    if member:
+        member.active = body.active
+    else:
+        db.add(models.Member(email=email, active=body.active, source="manual"))
+    db.commit()
+    return {"email": email, "active": body.active}
+
+
+@router.get("/api/admin/members")
+def list_members(db: Session = Depends(get_db)):
+    rows = db.execute(select(models.Member)
+        .order_by(_desc(models.Member.created))).scalars().all()
+    return {"count": len(rows), "members": [
+        {"email": r.email, "active": r.active, "source": r.source,
+         "since": r.created.date().isoformat()} for r in rows]}
+
+
+@router.get("/api/admin/login-code")
+def admin_peek_code(email: str, db: Session = Depends(get_db)):
+    """Support fallback when email delivery fails: shows whether a live code
+    exists for this member so you can walk them through login. (Codes are
+    hashed; issue a fresh one with request-code, then read Resend logs, or
+    use add-member + /welcome as the manual path.)"""
+    from datetime import datetime as _dt
+    row = db.execute(select(models.LoginCode).where(
+        models.LoginCode.email == email.strip().lower(),
+        models.LoginCode.used.is_(False),
+        models.LoginCode.expires > _dt.utcnow())
+        .order_by(_desc(models.LoginCode.id)).limit(1)).scalar_one_or_none()
+    return {"email": email, "live_code_exists": bool(row),
+            "expires": row.expires.isoformat() if row else None}
