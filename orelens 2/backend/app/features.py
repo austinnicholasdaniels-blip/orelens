@@ -3958,3 +3958,10 @@ def remove_company(body: RemoveCompanyBody, db: Session = Depends(get_db)):
     db.commit()
     return {"removed": True, "ticker": t, "name": c.name,
             "rows_deleted": counts}
+
+
+@router.get("/api/site-config")
+def site_config():
+    """Marketing-surface switches, all env-driven - no deploy to change."""
+    from .config import settings as _s
+    return {"training_video_url": _s.training_video_url or None}
