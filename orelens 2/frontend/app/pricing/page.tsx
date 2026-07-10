@@ -16,7 +16,7 @@ const FEATURES = [
 
 const FAQS = [
   ["Why is the price this low?",
-   "It's launch pricing for founding members. When the launch window closes, new members pay $725/year - but your rate locks at $99.99/year for as long as you stay subscribed."],
+   "It's launch pricing for founding members. When the launch window closes, new members pay $725/year - but your rate locks at $97.99/year for as long as you stay subscribed."],
   ["Can I cancel?",
    "Anytime, in two clicks, from the receipt Stripe emails you. No calls, no forms."],
   ["Is this investment advice?",
@@ -55,10 +55,10 @@ export default function Pricing() {
           <span className="line-through">$725/year</span> after the launch window
         </p>
         <p className="font-display text-6xl tracking-wide mt-2">
-          $99.99<span className="text-2xl text-ash">/year</span>
+          $97.99<span className="text-2xl text-ash">/year</span>
         </p>
         <p className="text-oxide text-sm mt-2">
-          Locks in for life &middot; that&apos;s $8.33/month for the full terminal
+          Locks in for life &middot; that&apos;s $8.17/month for the full terminal
         </p>
 
         {checkout ? (
