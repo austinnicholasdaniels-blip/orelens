@@ -79,6 +79,21 @@ export default function Pricing() {
         </p>
       </div>
 
+      <div className="bg-tray border border-seam rounded-sm p-6 md:flex items-center gap-6">
+        <div className="md:w-1/3">
+          <p className="text-ash text-xs uppercase tracking-[0.3em]">Members only</p>
+          <p className="font-display text-3xl tracking-wide mt-1">The <span className="text-assay">Assayer</span></p>
+          <p className="text-oxide text-sm mt-1">Bring your thesis. Leave with the truth.</p>
+        </div>
+        <p className="text-bone/85 leading-relaxed mt-3 md:mt-0 md:flex-1">
+          Type in your trade idea - ticker, entry, thesis - and our AI grades it
+          A to F against the platform&apos;s own dilution database: runway vs. your
+          timeline, raises announced but not closed, paid promotions running,
+          paper unlocking. Generic chatbots can&apos;t see any of that. The Assayer
+          reads the filings so your thesis gets tested, not flattered.
+        </p>
+      </div>
+
       <div>
         <p className="text-ash text-xs uppercase tracking-[0.25em] mb-4 text-center">Everything included</p>
         <div className="grid sm:grid-cols-2 gap-3">
