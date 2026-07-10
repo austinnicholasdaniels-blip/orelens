@@ -18,7 +18,9 @@ export default function PromoBar() {
   };
 
   return (
-    <a href="/training" className="block promo-shimmer bg-assay/12 border-b border-assay/60 hover:bg-assay/20 transition-colors relative overflow-hidden">
+    <a href="/training"
+       className="block sticky top-0 z-[60] promo-shimmer border-b border-assay/60 relative overflow-hidden"
+       style={{ backgroundColor: "#241C10" }}>
       <div className="max-w-7xl mx-auto px-6 py-2.5 flex items-center gap-3 text-sm">
         <span className="promo-pulse bg-assay text-shale text-[10px] font-bold tracking-[0.2em] px-2 py-1 rounded-sm whitespace-nowrap">
           FREE TRAINING
