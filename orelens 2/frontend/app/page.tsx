@@ -123,6 +123,22 @@ export default function Landing() {
         ))}
       </section>
 
+      {/* One of one - the edge statement */}
+      <section className="text-center py-10 border-y border-seam/70">
+        <p className="text-assay text-xs uppercase tracking-[0.4em] mb-3">One of One</p>
+        <h2 className="font-display text-4xl md:text-5xl tracking-wide max-w-3xl mx-auto leading-tight">
+          There is no second OreLens.
+        </h2>
+        <p className="text-bone/90 text-xl max-w-2xl mx-auto mt-5 leading-relaxed">
+          Other sites show you the chart. OreLens shows you the{" "}
+          <span className="hl">capital structure underneath it</span> - who&apos;s
+          running out of cash, whose paper free-trades next month, who&apos;s
+          paying for the hype. <span className="hl">No other platform has this
+          data</span>, which means <span className="hl">no other trader has
+          your edge</span>.
+        </p>
+      </section>
+
       {/* Live stats band */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
