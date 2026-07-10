@@ -110,6 +110,9 @@ export default function BetaGate({ children }: { children: React.ReactNode }) {
             Your access stays active on this browser for 45 days. We never sell
             your information.
           </p>
+          <p className="text-ash text-xs text-center mt-3">
+            Already a member? <a href="/login" className="text-assay hover:underline">Log in</a>
+          </p>
         </div>
       </div>
     </div>
