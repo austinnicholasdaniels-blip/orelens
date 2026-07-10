@@ -62,7 +62,7 @@ export default function Landing() {
   return (
     <div className="space-y-14">
       {/* Hero */}
-      <section className="text-center pt-8">
+      <section className="text-center pt-8 hero-glow">
         <p className="text-ash text-xs tracking-[0.3em] uppercase mb-4">Junior Mining Intelligence</p>
         <h1 className="font-display text-5xl md:text-6xl tracking-wide leading-tight">
           See dilution <span className="text-hazard">before</span> it hits.
