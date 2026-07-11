@@ -215,9 +215,61 @@ function DashboardInner() {
 
   const cols = COLUMNS[tab];
 
+  // tailwind safelist: border-assay text-assay border-oxide text-oxide border-hazard text-hazard
+  const sideItem = (t: { id: string; label: string }, color: string) => (
+    <button key={t.id} onClick={() => setTab(t.id)}
+      className={`w-full text-left font-display tracking-wide text-[17px] px-3 py-1.5 rounded-sm border-l-2 transition-colors ${
+        tab === t.id
+          ? `border-${color} text-${color} bg-tray`
+          : "border-transparent text-ash hover:text-bone hover:bg-tray/60"}`}>
+      {t.label}
+    </button>
+  );
+
   return (
-    <>
+    <div className="md:flex md:gap-6 md:items-start">
+      {/* ---- Terminal sidebar (desktop) ---- */}
+      <aside className="hidden md:block w-52 shrink-0 sticky top-16 self-start">
+        <div className="bg-tray/40 border border-seam rounded-sm p-2.5 space-y-4">
+          <div>
+            <p className="text-ash text-[10px] uppercase tracking-[0.3em] px-3 pt-1 pb-1.5">Terminal</p>
+            {sideItem({ id: "all-stocks", label: "All Stocks" }, "assay")}
+          </div>
+          <div>
+            <p className="text-oxide text-[10px] uppercase tracking-[0.3em] px-3 pb-1.5 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-oxide inline-block" />Bullish Scanners
+            </p>
+            {BULLISH_TABS.map((t) => sideItem(t, "oxide"))}
+          </div>
+          <div>
+            <p className="text-hazard text-[10px] uppercase tracking-[0.3em] px-3 pb-1.5 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-hazard inline-block" />Risk Factors
+            </p>
+            {RISK_TABS.map((t) => sideItem(t, "hazard"))}
+          </div>
+          <div className="border-t border-seam pt-2.5">
+            <a href="/assayer"
+               className="block font-display tracking-wide text-[17px] px-3 py-1.5 text-assay hover:bg-tray/60 rounded-sm">
+              The Assayer &rarr;
+            </a>
+          </div>
+        </div>
+      </aside>
+
+      {/* ---- Main column ---- */}
+      <div className="flex-1 min-w-0">
       <WatchlistBar />
+
+      {/* mobile scanner strip */}
+      <div className="md:hidden flex gap-1.5 overflow-x-auto pb-2 mb-3 -mx-1 px-1">
+        {TABS.map((t) => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`whitespace-nowrap font-display tracking-wide px-3 py-1 rounded-sm border text-sm ${
+              tab === t.id ? "border-assay text-assay bg-tray" : "border-seam text-ash"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
       <div>
       <div className="flex flex-col md:flex-row gap-2 mb-3">
         <div className="relative flex-1">
@@ -255,44 +307,6 @@ function DashboardInner() {
             <option value="">All jurisdictions</option>
             {TIERS.map((t) => <option key={t}>{t}</option>)}
           </select>
-        </div>
-      </div>
-
-      <div className="bg-tray/40 border border-seam rounded-sm mb-5 grid md:grid-cols-[auto_1fr_1.35fr]">
-        <div className="p-3 flex items-center">
-          <button onClick={() => setTab("all-stocks")}
-            className={`font-display tracking-wide px-3 py-1 rounded-sm border ${
-              tab === "all-stocks" ? "border-assay text-assay bg-shale" : "border-seam text-ash hover:text-bone"}`}>
-            All Stocks
-          </button>
-        </div>
-        <div className="p-3 border-t md:border-t-0 md:border-l border-seam">
-          <p className="text-oxide text-[10px] uppercase tracking-[0.3em] mb-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-oxide inline-block" />Bullish Scanners
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-              {BULLISH_TABS.map((t) => (
-                <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`font-display tracking-wide px-3 py-1 rounded-sm border ${
-                    tab === t.id ? "border-oxide text-oxide bg-shale" : "border-seam text-ash hover:text-bone"}`}>
-                  {t.label}
-                </button>
-              ))}
-          </div>
-        </div>
-        <div className="p-3 border-t md:border-t-0 md:border-l border-seam">
-          <p className="text-hazard text-[10px] uppercase tracking-[0.3em] mb-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-hazard inline-block" />Risk Factors
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-              {RISK_TABS.map((t) => (
-                <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`font-display tracking-wide px-3 py-1 rounded-sm border ${
-                    tab === t.id ? "border-hazard text-hazard bg-shale" : "border-seam text-ash hover:text-bone"}`}>
-                  {t.label}
-                </button>
-              ))}
-          </div>
         </div>
       </div>
 
@@ -380,6 +394,7 @@ function DashboardInner() {
       </table>
 
     </div>
-  </>
+    </div>
+    </div>
   );
 }
