@@ -1,3 +1,4 @@
+// build: sidebar-v2
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getScanner } from "@/lib/api";
