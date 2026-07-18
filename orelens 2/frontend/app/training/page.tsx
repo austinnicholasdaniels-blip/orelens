@@ -57,6 +57,14 @@ export default function Training() {
         </div>
       )}
 
+      <div className="text-center">
+        <a href="/training-deck.pdf" target="_blank" rel="noopener"
+           className="inline-block border border-assay text-assay font-display tracking-wide text-lg px-7 py-2.5 rounded-sm hover:bg-assay hover:text-shale transition-colors">
+          View the training slide deck &rarr;
+        </a>
+        <p className="text-ash text-xs mt-2">The full deck from the video - grades, the Unlock Calendar, the registry, The Assayer.</p>
+      </div>
+
       <div className="grid sm:grid-cols-3 gap-3">
         {[
           ["What you'll see", "The full dashboard - every scanner, live."],
