@@ -122,7 +122,7 @@ function AssayerInner() {
               </div>
               <p className="text-ash text-xs mt-1">
                 Assay score {a.score}/100 &middot; {result.ticker}
-                {result.tracked ? "" : " \u00b7 not yet in the OreLens universe - dilution picture unverified"}
+                {result.tracked ? "" : " \u00b7 not tracked yet - pulling its filings now; re-run in ~2 min for the full dilution read"}
               </p>
             </div>
           </div>
