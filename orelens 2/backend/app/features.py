@@ -8,7 +8,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from sqlalchemy import select, or_
+from sqlalchemy import select, func, or_
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -201,6 +201,35 @@ async def extract_filing(body: ExtractBody, db: Session = Depends(get_db)):
 from sqlalchemy import desc as _desc
 
 
+
+
+def _stale_tickers(db) -> set[str]:
+    """Tickers whose price feed has stopped updating - delisted, halted, or
+    dead symbols. Anything more than 10 days behind the freshest price in the
+    universe (or with no prices at all) is considered inactive."""
+    from datetime import timedelta as _td
+    max_day = db.execute(select(func.max(models.DailyPrice.day))).scalar()
+    if not max_day:
+        return set()
+    cutoff = max_day - _td(days=10)
+    rows = db.execute(
+        select(models.Company.ticker, func.max(models.DailyPrice.day))
+        .join(models.DailyPrice, models.DailyPrice.company_id == models.Company.id)
+        .group_by(models.Company.ticker)).all()
+    stale = {t for t, d in rows if d and d < cutoff}
+    priced = {t for t, _ in rows}
+    all_t = {t for (t,) in db.execute(select(models.Company.ticker)).all()}
+    return stale | (all_t - priced)
+
+
+def _drop_stale(db, rows):
+    """Filter scanner rows down to actively-trading tickers only."""
+    if not isinstance(rows, list):
+        return rows
+    s = _stale_tickers(db)
+    return [r for r in rows if r.get("ticker") not in s]
+
+
 @router.get("/api/scanners/most-dilutive")
 def most_dilutive(commodity: str | None = None, tier: str | None = None,
                   db: Session = Depends(get_db)):
@@ -235,7 +264,7 @@ def most_dilutive(commodity: str | None = None, tier: str | None = None,
             "grade": g.grade if g else None,
         })
     out.sort(key=lambda x: -x["qoq_pct"])
-    return out
+    return _drop_stale(db, out)
 
 
 # ------------------------------------------------- all-stocks market board
@@ -267,7 +296,7 @@ def all_stocks(commodity: str | None = None, tier: str | None = None,
             "grade": g.grade if g else None,
         })
     out.sort(key=lambda x: -(x["change_pct"] if x["change_pct"] is not None else -999))
-    return out
+    return _drop_stale(db, out)
 
 
 # ------------------------------------------------- press-release feed
@@ -302,7 +331,7 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
             "headline": r.headline, "url": r.url, "wire": r.wire,
             "drill_start": bool(r.is_drill_start),
         })
-    return out[:100]
+    return _drop_stale(db, out)[:100]
 
 
 # ------------------------------------------------- coiled-springs scanner
@@ -310,7 +339,7 @@ def news_feed(commodity: str | None = None, tier: str | None = None,
 def coiled_springs(commodity: str | None = None, tier: str | None = None,
                    db: Session = Depends(get_db)):
     from .services import scanners as _sc
-    return _sc.scan_coiled_springs(db, commodity, tier)
+    return _drop_stale(db, _sc.scan_coiled_springs(db, commodity, tier))
 
 
 # ------------------------------------------------- unlock calendar
@@ -346,7 +375,7 @@ def unlock_calendar(commodity: str | None = None, tier: str | None = None,
             "hold_expiry": fin.hold_expiry.isoformat(),
             "days_until": (fin.hold_expiry - today).days,
         })
-    return out
+    return _drop_stale(db, out)
 
 
 @router.post("/api/admin/detect-financings")
@@ -517,7 +546,7 @@ def stock_promotions(commodity: str | None = None, tier: str | None = None,
         })
     out.sort(key=lambda x: (not x["status"].startswith("ACTIVE"), x["announced"]), )
     out.sort(key=lambda x: not x["status"].startswith("ACTIVE"))
-    return out
+    return _drop_stale(db, out)
 
 
 @router.post("/api/admin/backfill-promotions")
@@ -1757,7 +1786,7 @@ def dilution_risk(commodity: str | None = None, tier: str | None = None,
             "why": " - ".join(why), "grade": _grade_of(db, c.id),
         })
     out.sort(key=lambda x: -x["score"])
-    return out
+    return _drop_stale(db, out)
 
 
 @router.get("/api/scanners/burn-league")
@@ -1792,7 +1821,7 @@ def burn_league(commodity: str | None = None, tier: str | None = None,
             "grade": _grade_of(db, c.id),
         })
     out.sort(key=lambda x: x["runway_m"])
-    return out
+    return _drop_stale(db, out)
 
 
 @router.get("/api/scanners/serial-raisers")
@@ -1825,7 +1854,7 @@ def serial_raisers(commodity: str | None = None, tier: str | None = None,
             "grade": _grade_of(db, c.id),
         })
     out.sort(key=lambda x: (-x["raises_3y"], x["ticker"]))
-    return out
+    return _drop_stale(db, out)
 
 
 @router.get("/api/scanners/bullish-setups")
@@ -1884,7 +1913,7 @@ def bullish_setups(commodity: str | None = None, tier: str | None = None,
             "why": " - ".join(why), "grade": _grade_of(db, c.id),
         })
     out.sort(key=lambda x: -x["score"])
-    return out
+    return _drop_stale(db, out)
 
 
 # ------------------------------------------------ EODHD news refresh (mining)
@@ -4130,3 +4159,26 @@ def update_company(body: UpdateCompanyBody, db: Session = Depends(get_db)):
     db.commit()
     return {"updated": True, "ticker": c.ticker, "name": c.name,
             "commodity": c.commodity, "exchange": c.exchange}
+
+
+@router.get("/api/admin/staleness-audit")
+def staleness_audit(db: Session = Depends(get_db)):
+    """Which tickers look dead? Latest price day + gap vs the universe max."""
+    from datetime import timedelta as _td
+    max_day = db.execute(select(func.max(models.DailyPrice.day))).scalar()
+    rows = db.execute(
+        select(models.Company.ticker, models.Company.name,
+               models.Company.exchange, func.max(models.DailyPrice.day))
+        .join(models.DailyPrice, models.DailyPrice.company_id == models.Company.id,
+              isouter=True)
+        .group_by(models.Company.ticker, models.Company.name,
+                  models.Company.exchange)).all()
+    out = []
+    for t, name, ex, d in rows:
+        behind = (max_day - d).days if (d and max_day) else None
+        out.append({"ticker": t, "name": name, "exchange": ex,
+                    "last_price": str(d) if d else None,
+                    "days_behind": behind if behind is not None else 9999})
+    out.sort(key=lambda r: -r["days_behind"])
+    return {"universe_max_day": str(max_day), "suspects":
+            [r for r in out if r["days_behind"] > 10], "all_count": len(out)}
