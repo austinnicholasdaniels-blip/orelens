@@ -47,11 +47,22 @@ class GradeResult:
     rationale: str
 
 
+SELF_FUNDED_RUNWAY = 999.0   # sentinel: no net burn - "runway" is meaningless
+CAP_RUNWAY = 120.0           # cap real runways at 10y so tiny burns can't print absurdities
+
+
 def compute_grade(x: GradeInput) -> GradeResult:
-    burn = max(x.monthly_burn, 1.0)  # avoid div/0; a $0-burn shell is effectively infinite runway
-    runway = x.cash / burn
     drill_cost = x.planned_holes * x.avg_depth_m * x.cost_per_meter
-    adj_runway = (x.cash - drill_cost) / burn
+    self_funded = x.monthly_burn <= 0
+    if self_funded:
+        # Cash-flow positive or no measured burn: infinite runway conceptually,
+        # sentinel numerically. Never divide cash by a fake $1.
+        burn = 0.0
+        runway = adj_runway = SELF_FUNDED_RUNWAY
+    else:
+        burn = max(x.monthly_burn, 1.0)
+        runway = min(x.cash / burn, CAP_RUNWAY)
+        adj_runway = min((x.cash - drill_cost) / burn, CAP_RUNWAY)
 
     live = [t for t in x.tranches if t.expiry >= x.today]
     itm_cash = sum(t.quantity * t.strike for t in live if t.strike < x.price)
@@ -89,6 +100,10 @@ def compute_grade(x: GradeInput) -> GradeResult:
             why += f"; overhang {overhang_ratio:.1%} of float"
         else:
             grade, why = "B", f"Funding secure but warrant overhang is {overhang_ratio:.1%} of float (≥15%)"
+
+    if self_funded and grade in ("A", "B"):
+        why = (f"Self-funded - no net cash burn; "
+               f"overhang {overhang_ratio:.1%} of float")
 
     return GradeResult(
         grade=grade,
