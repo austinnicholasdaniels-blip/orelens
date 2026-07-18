@@ -2,6 +2,7 @@
 // build: sidebar-v2
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import DataDisclaimer from "@/components/DataDisclaimer";
 import { getScanner } from "@/lib/api";
 import GradeChip from "@/components/GradeChip";
 import BetaGate from "@/components/BetaGate";
@@ -435,6 +436,7 @@ function DashboardInner() {
         </tbody>
       </table>
 
+      <DataDisclaimer variant="scanner" />
     </div>
     </div>
     </div>
