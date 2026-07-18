@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import DataDisclaimer from "@/components/DataDisclaimer";
 import BetaGate from "@/components/BetaGate";
 import { sessionToken } from "@/components/watchlistClient";
 
@@ -166,9 +167,10 @@ function AssayerInner() {
             <p className="text-bone/90 leading-relaxed">{a.feedback}</p>
           </div>
 
+          <DataDisclaimer variant="assayer" />
+
           <p className="text-ash text-xs text-center">
-            {result.assays_left_today} assays left today &middot; The Assayer grades
-            idea quality from filings-based data. Research tool, not investment advice.
+            {result.assays_left_today} assays left today
           </p>
         </div>
       )}
