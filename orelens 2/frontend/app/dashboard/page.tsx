@@ -399,6 +399,20 @@ function DashboardInner() {
                     <span className="text-xs text-ash font-mono">{(r.published ?? "").slice(0, 16).replace("T", " ")}</span>
                   ) : c.key === "volume" ? (
                     <span className="font-mono">{(r.volume ?? 0).toLocaleString()}</span>
+                  ) : c.key === "runway_m" ? (
+                    <span className={`font-mono ${(r.runway_m ?? 0) >= 900 ? "text-oxide" : ""}`}>
+                      {r.runway_m == null ? "-"
+                        : r.runway_m >= 900 ? "Self-funded"
+                        : r.runway_m >= 120 ? "120+"
+                        : r.runway_m}
+                    </span>
+                  ) : c.key === "monthly_burn" ? (
+                    <span className={`font-mono ${(r.monthly_burn ?? 1) <= 0 ? "text-oxide" : ""}`}>
+                      {r.monthly_burn == null ? "-"
+                        : r.monthly_burn <= 0 ? "Self-funded"
+                        : r.monthly_burn >= 1e6 ? `$${(r.monthly_burn / 1e6).toFixed(1)}M`
+                        : `$${Math.round(r.monthly_burn / 1e3)}k`}
+                    </span>
                   ) : c.key === "grade" ? (
                     <GradeChip grade={r.grade} />
                   ) : c.key === "why" ? (
