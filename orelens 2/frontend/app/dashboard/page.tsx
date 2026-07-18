@@ -400,9 +400,10 @@ function DashboardInner() {
                   ) : c.key === "volume" ? (
                     <span className="font-mono">{(r.volume ?? 0).toLocaleString()}</span>
                   ) : c.key === "runway_m" ? (
-                    <span className={`font-mono ${(r.runway_m ?? 0) >= 900 ? "text-oxide" : ""}`}>
+                    <span className={`font-mono ${(r.runway_m ?? 0) >= 999 ? "text-oxide" : (r.runway_m ?? 0) >= 900 ? "text-ash" : ""}`}>
                       {r.runway_m == null ? "-"
-                        : r.runway_m >= 900 ? "Self-funded"
+                        : r.runway_m >= 999 ? "Self-funded"
+                        : r.runway_m >= 900 ? "n/a"
                         : r.runway_m >= 120 ? "120+"
                         : r.runway_m}
                     </span>
