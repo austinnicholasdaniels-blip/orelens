@@ -4072,3 +4072,12 @@ def request_ticker(body: RequestTickerBody, db: Session = Depends(get_db)):
 @router.get("/api/request-ticker-status")
 def request_ticker_status(ticker: str):
     return _ADD_STATUS.get(ticker.upper().strip(), {"state": "unknown"})
+
+
+@router.post("/api/admin/regrade")
+def regrade_all(db: Session = Depends(get_db)):
+    """Recompute every company's grade immediately (same code the nightly runs)."""
+    from .jobs.nightly import run_grades
+    run_grades(db)
+    n = len(db.execute(select(models.Grade)).scalars().all())
+    return {"regraded": True, "grades": n}
