@@ -354,12 +354,36 @@ async def run_sweeps(db: Session) -> dict:
     return out
 
 
+def purge_misattributed(db: Session) -> dict:
+    """Self-healing: delete any event whose source headline doesn't name the
+    company it's filed under. Runs every night so bad rows can never
+    accumulate silently between manual audits."""
+    import sqlalchemy as _sa
+    from ..services.attribution import source_names_company as _names_co
+    companies = {c.id: c for c in db.execute(select(Company)).scalars()}
+    removed = {"financings": 0, "promotions": 0, "examples": []}
+    for model, key in ((Financing, "financings"), (Promotion, "promotions")):
+        for row in db.execute(select(model)).scalars().all():
+            c = companies.get(row.company_id)
+            if not c or not row.headline:
+                continue
+            if not _names_co(row.headline, c.ticker, c.name, c.exchange):
+                if len(removed["examples"]) < 5:
+                    removed["examples"].append(
+                        f"{c.ticker} <- {row.headline[:70]}")
+                db.execute(_sa.delete(model).where(model.id == row.id))
+                removed[key] += 1
+    db.commit()
+    return removed
+
+
 async def run_nightly() -> dict:
     started = datetime.utcnow()
     db = SessionLocal()
     errors: dict = {}
     wire_stats: dict = {}
     sweep_stats: dict = {}
+    hygiene: dict = {}
     try:
         for name, step in (("prices", sync_prices), ("filings", sync_filings)):
             try:
@@ -378,6 +402,11 @@ async def run_nightly() -> dict:
             db.rollback()
             errors["sweeps"] = str(exc)[:200]
         try:
+            hygiene = purge_misattributed(db)
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            errors["hygiene"] = str(exc)[:200]
+        try:
             run_grades(db)
         except Exception as exc:  # noqa: BLE001
             db.rollback()
@@ -387,7 +416,7 @@ async def run_nightly() -> dict:
     return {"started": started.isoformat(),
             "finished": datetime.utcnow().isoformat(),
             "newswire": wire_stats, "sweeps": sweep_stats,
-            "errors": errors or None}
+            "hygiene": hygiene, "errors": errors or None}
 
 
 if __name__ == "__main__":
