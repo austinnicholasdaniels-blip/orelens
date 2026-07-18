@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import DataDisclaimer from "@/components/DataDisclaimer";
 import { getTicker, fmt } from "@/lib/api";
 import TVChart from "@/components/TVChart";
 import WatchButton from "@/components/WatchButton";
@@ -131,6 +132,7 @@ function TickerInner({ params }: { params: { symbol: string } }) {
               &#9888; {f.amount && f.price ? `~${(f.amount / f.price / 1e6).toFixed(1)}M shares` : "Placement paper"} free-trading on <span className="font-mono">{f.hold_expiry}</span> ({daysTo(f.hold_expiry)}d)
             </div>
           ))}
+          <DataDisclaimer variant="events" className="mt-0 mb-3 pt-0 border-t-0" />
           {financings.length === 0 && (
             <p className="text-ash text-sm">No financings detected in the last several months of news.</p>
           )}
@@ -160,6 +162,7 @@ function TickerInner({ params }: { params: { symbol: string } }) {
       </div>
 
       <DrillTimeline program={program} results={drill_results} comparison={comparison} />
+      <DataDisclaimer variant="ticker" />
     </div>
   );
 }
