@@ -4079,5 +4079,5 @@ def regrade_all(db: Session = Depends(get_db)):
     """Recompute every company's grade immediately (same code the nightly runs)."""
     from .jobs.nightly import run_grades
     run_grades(db)
-    n = len(db.execute(select(models.Grade)).scalars().all())
+    n = len(db.execute(select(models.DilutionGrade)).scalars().all())
     return {"regraded": True, "grades": n}
