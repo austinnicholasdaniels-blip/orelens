@@ -1685,8 +1685,15 @@ def _burn_runway(db, cid):
     runway = (fin.cash / burn) if (fin.cash and burn) else None
     closed_amt, closed_date, announced_amt, announced_date = 0.0, None, 0.0, None
     cutoff = date.today() - _td(days=120)
+    from .services.attribution import source_names_company as _names_co
+    _co = db.get(models.Company, cid)
     for r in db.execute(select(models.Financing).where(
             models.Financing.company_id == cid)).scalars():
+        # A dated raise is an assertion about this issuer. If the source
+        # headline doesn't name them, we don't claim it happened.
+        if _co and r.headline and not _names_co(r.headline, _co.ticker,
+                                                _co.name, _co.exchange):
+            continue
         if r.closed and r.close_date and r.close_date > fin.as_of:
             closed_amt += (r.amount or 0)
             closed_date = max(closed_date or r.close_date, r.close_date)
@@ -3739,6 +3746,24 @@ def watchlist_sync(body: WatchSyncBody, db: Session = Depends(get_db)):
 ASSAYER_DAILY_CAP = 10
 
 
+def _verified_events(db, c) -> dict:
+    """Financings and promotions whose SOURCE HEADLINE actually names this
+    company. Anything unverifiable is withheld rather than asserted."""
+    from .services.attribution import source_names_company as _names_co
+    fins = db.execute(select(models.Financing).where(
+        models.Financing.company_id == c.id)
+        .order_by(_desc(models.Financing.announced)).limit(8)).scalars().all()
+    promos = db.execute(select(models.Promotion).where(
+        models.Promotion.company_id == c.id)
+        .order_by(_desc(models.Promotion.announced)).limit(6)).scalars().all()
+    ok_f = [x for x in fins if _names_co(x.headline or "", c.ticker, c.name,
+                                         c.exchange)]
+    ok_p = [x for x in promos if _names_co(x.headline or "", c.ticker, c.name,
+                                           c.exchange)]
+    return {"financings": ok_f, "promotions": ok_p,
+            "withheld": (len(fins) - len(ok_f)) + (len(promos) - len(ok_p))}
+
+
 def _assayer_context(db, ticker: str) -> dict:
     """Everything OreLens knows about this company, packed for the model."""
     c = db.execute(select(models.Company).where(
@@ -3780,13 +3805,20 @@ def _assayer_context(db, ticker: str) -> dict:
             ctx["share_growth_1y_pct"] = round(
                 (hist[-1].shares / yr_ago[-1].shares - 1) * 100, 1)
     # active/recent promotions
-    promos = db.execute(select(models.Promotion).where(
-        models.Promotion.company_id == c.id)
-        .order_by(_desc(models.Promotion.announced)).limit(3)).scalars().all()
-    if promos:
+    _ev = _verified_events(db, c)
+    if _ev["promotions"]:
         ctx["paid_promotions"] = [
             {"announced": str(p.announced), "firm": p.firm, "paid": p.amount,
-             "ends": str(p.ends) if p.ends else None} for p in promos]
+             "ends": str(p.ends) if p.ends else None,
+             "source_headline": (p.headline or "")[:160]}
+            for p in _ev["promotions"][:3]]
+    if _ev["financings"]:
+        ctx["financings_verified"] = [
+            {"announced": str(x.announced), "closed": bool(x.closed),
+             "amount": x.amount, "kind": x.kind,
+             "source_headline": (x.headline or "")[:160]}
+            for x in _ev["financings"][:4]]
+    ctx["events_withheld_unverified"] = _ev["withheld"]
     # upcoming unlocks
     from datetime import timedelta as _td
     unlocks = db.execute(select(models.Financing).where(
@@ -3824,6 +3856,14 @@ tag looked off in one short clause, no more).
 - MISSING DATA IS MISSING, NOT ZERO: if burn, cash, or runway are absent or \
 zero-with-no-context, say the filings picture is thin - NEVER claim a \
 company "has no burn" or "infinite runway" from absent data.
+- EVENTS NEED SOURCES: only state that a company announced, closed, or is \
+running a financing or promotion if that event appears in PLATFORM DATA with \
+a source_headline that names this company. Never infer, guess, or recall \
+such events from your own memory, and never state a date for one that isn't \
+in the platform data. If no such events are present, say the platform shows \
+no recent financing or promotion activity on record - that is a complete and \
+acceptable answer. Getting this wrong publishes a false statement about a \
+real issuer, which is the single worst error you can make.
 - The member picked an exchange in the form; the platform may record a \
 different primary listing. Don't scold either way - many names trade on \
 multiple venues. Use the correct primary listing if you know it.
@@ -4182,3 +4222,44 @@ def staleness_audit(db: Session = Depends(get_db)):
     out.sort(key=lambda r: -r["days_behind"])
     return {"universe_max_day": str(max_day), "suspects":
             [r for r in out if r["days_behind"] > 10], "all_count": len(out)}
+
+
+@router.get("/api/admin/audit-attribution")
+def audit_attribution(fix: bool = False, db: Session = Depends(get_db)):
+    """Find events whose source headline never names the company they're filed
+    under - the misattribution class. fix=true deletes the bad rows."""
+    from .services.attribution import source_names_company as _names_co, why_rejected
+    import sqlalchemy as _sa
+    bad_f, bad_p = [], []
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+    for x in db.execute(select(models.Financing)).scalars():
+        c = companies.get(x.company_id)
+        if not c:
+            continue
+        if not _names_co(x.headline or "", c.ticker, c.name, c.exchange):
+            bad_f.append({"id": x.id, "ticker": c.ticker, "company": c.name,
+                          "announced": str(x.announced),
+                          "headline": (x.headline or "")[:110],
+                          "why": why_rejected(x.headline or "", c.ticker, c.name)})
+    for x in db.execute(select(models.Promotion)).scalars():
+        c = companies.get(x.company_id)
+        if not c:
+            continue
+        if not _names_co(x.headline or "", c.ticker, c.name, c.exchange):
+            bad_p.append({"id": x.id, "ticker": c.ticker, "company": c.name,
+                          "announced": str(x.announced),
+                          "headline": (x.headline or "")[:110]})
+    deleted = 0
+    if fix:
+        for row in bad_f:
+            db.execute(_sa.delete(models.Financing).where(
+                models.Financing.id == row["id"]))
+            deleted += 1
+        for row in bad_p:
+            db.execute(_sa.delete(models.Promotion).where(
+                models.Promotion.id == row["id"]))
+            deleted += 1
+        db.commit()
+    return {"dry_run": not fix, "bad_financings": bad_f,
+            "bad_promotions": bad_p, "deleted": deleted,
+            "note": "Add ?fix=true to delete these rows."}
