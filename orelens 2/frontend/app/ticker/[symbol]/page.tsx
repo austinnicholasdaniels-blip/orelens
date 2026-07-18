@@ -64,7 +64,7 @@ function TickerInner({ params }: { params: { symbol: string } }) {
             <dt className="text-ash">Shares Outstanding</dt><dd className="font-mono text-right">{fmt.shares(capital.shares_outstanding)}</dd>
             <dt className="text-ash">Fully Diluted</dt><dd className="font-mono text-right">{fmt.shares(capital.fully_diluted)}</dd>
             <dt className="text-ash">Cash Balance</dt><dd className="font-mono text-right">{fmt.money(capital.cash)}</dd>
-            <dt className="text-ash">Monthly Burn</dt><dd className="font-mono text-right">{fmt.money(capital.monthly_burn)}</dd>
+            <dt className="text-ash">Monthly Burn</dt><dd className="font-mono text-right">{capital.monthly_burn != null && capital.monthly_burn <= 0 ? <span className="text-oxide">Self-funded</span> : fmt.money(capital.monthly_burn)}</dd>
             <dt className="text-ash">Theoretical Cash from Warrants</dt><dd className="font-mono text-right text-oxide">{fmt.money(capital.theoretical_warrant_cash)}</dd>
           </dl>
         </div>
@@ -86,9 +86,14 @@ function TickerInner({ params }: { params: { symbol: string } }) {
               {ds.est_capital_raised_3y_m != null ? `$${ds.est_capital_raised_3y_m}M` : "\u2014"}</dd>
             <dt className="text-ash">Runway</dt>
             <dd className="font-mono text-right">
-              {ds.adjusted_runway_m != null
-                ? `${ds.adjusted_runway_m} mo (incl. $${ds.raised_since_snapshot_m}M raised)`
-                : ds.runway_m != null ? `${ds.runway_m} mo` : "\u2014"}</dd>
+              {(() => {
+                const v = ds.adjusted_runway_m ?? ds.runway_m;
+                if (v == null) return "\u2014";
+                if (v >= 900) return <span className="text-oxide">Self-funded - no net burn</span>;
+                const label = v >= 120 ? "120+ mo" : `${v} mo`;
+                return ds.adjusted_runway_m != null
+                  ? `${label} (incl. $${ds.raised_since_snapshot_m}M raised)` : label;
+              })()}</dd>
           </dl>
           {(ds.raise_events_3y ?? []).length > 0 && (
             <div className="mt-3 pt-3 border-t border-seam">
