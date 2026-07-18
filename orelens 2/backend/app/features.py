@@ -4263,3 +4263,50 @@ def audit_attribution(fix: bool = False, db: Session = Depends(get_db)):
     return {"dry_run": not fix, "bad_financings": bad_f,
             "bad_promotions": bad_p, "deleted": deleted,
             "note": "Add ?fix=true to delete these rows."}
+
+
+@router.get("/api/admin/integrity-report")
+def integrity_report(db: Session = Depends(get_db)):
+    """One call: is the data safe to show members? Combines attribution,
+    freshness, burn evidence, and name hygiene into a single verdict."""
+    from .services.attribution import (source_names_company as _names_co,
+                                       distinctive_tokens as _tok)
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+
+    misattributed = 0
+    for model in (models.Financing, models.Promotion):
+        for row in db.execute(select(model)).scalars():
+            c = companies.get(row.company_id)
+            if c and row.headline and not _names_co(row.headline, c.ticker,
+                                                    c.name, c.exchange):
+                misattributed += 1
+
+    stale = sorted(_stale_tickers(db))
+    weak_names = [c.ticker for c in companies.values()
+                  if not _tok(c.name or "")]
+    unknown_burn = [g.company_id for g in db.execute(
+        select(models.DilutionGrade)).scalars()
+        if (g.adjusted_runway_m or 0) >= 990 and (g.adjusted_runway_m or 0) < 999]
+
+    checks = [
+        {"check": "Event attribution",
+         "detail": "every financing/promotion traces to a headline naming the issuer",
+         "status": "PASS" if misattributed == 0 else "FAIL",
+         "count": misattributed},
+        {"check": "Ticker freshness",
+         "detail": "tickers with a live price feed (stale ones auto-hidden)",
+         "status": "PASS" if not stale else "INFO",
+         "count": len(stale), "tickers": stale[:12]},
+        {"check": "Company naming",
+         "detail": "names distinctive enough to attribute news safely",
+         "status": "PASS" if not weak_names else "WARN",
+         "count": len(weak_names), "tickers": weak_names[:12]},
+        {"check": "Burn measurability",
+         "detail": "companies whose filings are too thin to measure burn (shown as n/a)",
+         "status": "INFO", "count": len(unknown_burn)},
+    ]
+    failing = [c for c in checks if c["status"] == "FAIL"]
+    return {"verdict": "SAFE TO SHOW" if not failing else "ISSUES FOUND",
+            "universe": len(companies), "checks": checks,
+            "next_step": ("Nothing to do." if not failing else
+                          "Run /api/admin/audit-attribution?fix=true")}
