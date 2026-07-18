@@ -3780,11 +3780,27 @@ fair trading-desk mentor. Direct, specific, zero hype, zero filler. You are a \
 research tool, never an advisor - grade the QUALITY OF THE IDEA AND ITS \
 REASONING, don't tell them to buy or sell.
 
-You receive PLATFORM DATA computed from filings and licensed market data. \
-Weigh it heavily - especially dilution grade, runway, announced raises, paid \
-promotions, and upcoming unlocks. If platform data contradicts the thesis, \
-say so plainly. If the company isn't tracked, grade the thesis on its own \
-logic and say the dilution picture is unverified.
+AUTHORITY SPLIT - follow this strictly:
+- PLATFORM DATA is authoritative for FIGURES: cash, burn, runway, raises \
+(closed and announced), paid promotions, unlock dates and sizes, share \
+counts, and recent prices. Weigh these heavily; if figures contradict the \
+thesis, say so plainly.
+- YOUR OWN KNOWLEDGE is authoritative for COMPANY IDENTITY: what the company \
+actually is, its primary commodity and flagship asset, producer vs developer \
+vs explorer status, jurisdiction, and where it trades. Platform \
+classification fields (name/commodity/exchange) can be coarse or stale - if \
+they conflict with what you know about a well-known company, TRUST YOUR \
+KNOWLEDGE and quietly use the correct identity (you may note the platform \
+tag looked off in one short clause, no more).
+- MISSING DATA IS MISSING, NOT ZERO: if burn, cash, or runway are absent or \
+zero-with-no-context, say the filings picture is thin - NEVER claim a \
+company "has no burn" or "infinite runway" from absent data.
+- The member picked an exchange in the form; the platform may record a \
+different primary listing. Don't scold either way - many names trade on \
+multiple venues. Use the correct primary listing if you know it.
+
+If the company isn't tracked, grade the thesis on its own logic, use your \
+knowledge of the company, and say the dilution picture is unverified.
 
 Respond with ONLY a JSON object, no markdown fences, in exactly this shape:
 {"grade": "A"|"B"|"C"|"D"|"F",
@@ -3836,6 +3852,15 @@ def assay_trade(body: AssayBody, db: Session = Depends(get_db)):
         return {"ok": False, "error": "Give The Assayer a ticker and a real "
                 "thesis (a few sentences minimum)."}
     ctx = _assayer_context(db, ticker)
+    if not ctx.get("tracked"):
+        # kick a background ingest so the NEXT assay has full dilution context
+        import threading as _th
+        if _ADD_STATUS.get(ticker, {}).get("state") != "running":
+            _ADD_STATUS[ticker] = {"state": "running"}
+            _th.Thread(target=_ingest_new_ticker, args=(ticker,),
+                       daemon=True).start()
+        ctx["note"] = ("Not yet in the OreLens universe - a filings pull "
+                       "just started in the background.")
     user_msg = _json.dumps({
         "trade_idea": {"ticker": ticker, "exchange": body.exchange,
                        "entry_price": body.entry_price, "thesis": thesis},
@@ -4081,3 +4106,27 @@ def regrade_all(db: Session = Depends(get_db)):
     run_grades(db)
     n = len(db.execute(select(models.DilutionGrade)).scalars().all())
     return {"regraded": True, "grades": n}
+
+
+class UpdateCompanyBody(BaseModel):
+    ticker: str
+    name: str | None = None
+    commodity: str | None = None
+    exchange: str | None = None
+    jurisdiction: str | None = None
+
+
+@router.post("/api/admin/update-company")
+def update_company(body: UpdateCompanyBody, db: Session = Depends(get_db)):
+    """Correct a company's identity fields (name / commodity / exchange)."""
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == body.ticker.upper().strip())).scalar_one_or_none()
+    if not c:
+        return {"updated": False, "error": "not tracked"}
+    for field in ("name", "commodity", "exchange", "jurisdiction"):
+        v = getattr(body, field)
+        if v:
+            setattr(c, field, v.strip())
+    db.commit()
+    return {"updated": True, "ticker": c.ticker, "name": c.name,
+            "commodity": c.commodity, "exchange": c.exchange}
