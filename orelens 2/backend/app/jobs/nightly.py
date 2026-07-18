@@ -144,8 +144,8 @@ def _upsert_promotion(db: Session, company_id: int, published, headline: str,
 
 async def sync_newswires(db: Session) -> dict:
     import re as _re
-    tickers = {c.ticker: c.id for c in db.execute(select(Company)).scalars()}
-    names = {c.name.lower(): c.id for c in db.execute(select(Company)).scalars()}
+    _companies = db.execute(select(Company)).scalars().all()
+    tickers = {c.ticker: c.id for c in _companies}
     from ..config import settings as _settings
     if _settings.eodhd_api_key:
         from ..services import eodhd as _eodhd
@@ -179,8 +179,13 @@ async def sync_newswires(db: Session) -> dict:
                 company_id = cid
                 break
         if not company_id:
-            company_id = next(
-                (cid for nm, cid in names.items() if nm in text.lower()), None)
+            # word-bounded, distinctive-token matching only. A bare substring
+            # ("aya" inside "Depositary") is how releases get misfiled.
+            from ..services.attribution import source_names_company as _names_co
+            for _c in _companies:
+                if _names_co(text, _c.ticker, _c.name, _c.exchange):
+                    company_id = _c.id
+                    break
 
         pr = PressRelease(
             company_id=company_id, published=item["published"],
@@ -207,11 +212,18 @@ async def sync_newswires(db: Session) -> dict:
                 full = ingest.fetch_release_text(item["url"])
                 if len(full) > len(text):
                     deep = full
-            f = _fin.parse_financing(deep)
+            from ..services.attribution import source_names_company as _names_co
+            _co = db.get(Company, company_id)
+            # Events are assertions about an issuer: only record them when the
+            # HEADLINE itself names the company. Full-page text is too noisy
+            # (sidebars, related releases) to justify a dated financial claim.
+            _headline_ok = bool(_co) and _names_co(
+                item["headline"], _co.ticker, _co.name, _co.exchange)
+            f = _fin.parse_financing(deep) if _headline_ok else None
             if f:
                 _upsert_financing(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], f)
-            pmo = _promo.parse_promotion(deep)
+            pmo = _promo.parse_promotion(deep) if _headline_ok else None
             if pmo:
                 _upsert_promotion(db, company_id, item["published"],
                                   item["headline"][:400], item["url"][:400], pmo)
