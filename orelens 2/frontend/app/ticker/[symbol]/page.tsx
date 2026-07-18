@@ -146,7 +146,13 @@ function TickerInner({ params }: { params: { symbol: string } }) {
               {f.closed && f.hold_expiry && (
                 <span className="text-xs text-ash">free-trading {f.hold_expiry}</span>
               )}
-              <a href={f.url} target="_blank" rel="noopener noreferrer" className="text-xs text-assay hover:underline ml-auto">source</a>
+              <a href={f.url} target="_blank" rel="noopener noreferrer"
+                 className="text-xs text-assay hover:underline ml-auto">source &#8599;</a>
+              {f.headline && (
+                <span className="w-full text-xs text-ash mt-0.5 italic">
+                  from: {f.headline}
+                </span>
+              )}
             </div>
           ))}
         </div>
