@@ -89,7 +89,8 @@ function TickerInner({ params }: { params: { symbol: string } }) {
               {(() => {
                 const v = ds.adjusted_runway_m ?? ds.runway_m;
                 if (v == null) return "\u2014";
-                if (v >= 900) return <span className="text-oxide">Self-funded - no net burn</span>;
+                if (v >= 999) return <span className="text-oxide">Self-funded - no net burn</span>;
+                if (v >= 900) return <span className="text-ash">n/a - filings too thin to measure</span>;
                 const label = v >= 120 ? "120+ mo" : `${v} mo`;
                 return ds.adjusted_runway_m != null
                   ? `${label} (incl. $${ds.raised_since_snapshot_m}M raised)` : label;
