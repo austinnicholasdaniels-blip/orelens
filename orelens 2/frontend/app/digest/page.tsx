@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import DataDisclaimer from "@/components/DataDisclaimer";
 import ConversionBand from "@/components/ConversionBand";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -121,6 +122,7 @@ export default function Digest() {
         Research tool, not investment advice.
       </p>
       <ConversionBand context="Get this intelligence every week - plus the terminal behind it." />
+      <DataDisclaimer variant="digest" />
     </div>
   );
 }
