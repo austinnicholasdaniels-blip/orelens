@@ -256,6 +256,26 @@ def run_grades(db: Session) -> None:
         ).scalar_one_or_none()
         if not fin or not price:
             continue
+        # ---- burn evidence: stated -> estimated -> self-funded -> unknown ----
+        snaps = db.execute(
+            select(FinancialSnapshot).where(FinancialSnapshot.company_id == c.id)
+            .order_by(FinancialSnapshot.as_of)).scalars().all()
+        effective_burn = fin.monthly_burn if (fin.monthly_burn or 0) > 0 else 0.0
+        burn_state = "stated" if effective_burn > 0 else None
+        if not burn_state:
+            declines = []
+            for a, b in zip(snaps[-8:], snaps[-8:][1:]):
+                if a.cash and b.cash and b.cash < a.cash:
+                    q_days = max((b.as_of - a.as_of).days, 30)
+                    declines.append((a.cash - b.cash) / (q_days / 30.4))
+            if len(declines) >= 2:
+                declines.sort()
+                effective_burn = round(declines[len(declines) // 2], 0)
+                burn_state = "estimated"
+            elif len(snaps) >= 2 and snaps[-1].cash >= (snaps[0].cash or 0):
+                burn_state = "self_funded"   # real evidence: treasury not shrinking
+            else:
+                burn_state = "unknown"       # one thin snapshot - claim nothing
         prog = db.execute(
             select(DrillProgram).where(DrillProgram.company_id == c.id,
                                        DrillProgram.active.is_(True))
@@ -267,12 +287,22 @@ def run_grades(db: Session) -> None:
                 WarrantTranche.company_id == c.id)).scalars()
         ]
         res = compute_grade(GradeInput(
-            cash=fin.cash, monthly_burn=fin.monthly_burn, price=price.close,
+            cash=fin.cash, monthly_burn=effective_burn, price=price.close,
             shares_outstanding=c.shares_outstanding, tranches=tranches,
             planned_holes=prog.planned_holes if prog else 0,
             avg_depth_m=prog.avg_depth_m if prog else 0,
             cost_per_meter=prog.cost_per_meter if prog else 250.0,
         ))
+        if burn_state == "unknown":
+            # runway is unknowable; grade stands on overhang/unlocks only
+            res.cash_runway_m = res.adjusted_runway_m = 998.0
+            res.rationale = ("Burn not measurable from available filings; "
+                             "graded on overhang and unlock risk only. "
+                             + res.rationale)
+        elif burn_state == "estimated":
+            res.rationale = ("Burn estimated from treasury decline "
+                             f"(~${effective_burn/1e3:.0f}k/mo); " + res.rationale)
+
         existing = db.execute(
             select(DilutionGrade).where(DilutionGrade.company_id == c.id,
                                         DilutionGrade.day == today)
