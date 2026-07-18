@@ -3965,3 +3965,110 @@ def site_config():
     """Marketing-surface switches, all env-driven - no deploy to change."""
     from .config import settings as _s
     return {"training_video_url": _s.training_video_url or None}
+
+
+# ==================== PUBLIC ADD-TICKER (background) ========================
+# The search bar's "not tracked yet" path. Runs the slow ingest in a thread
+# so the browser never waits on a 60-90s request (which the gateway would
+# kill anyway), and reports progress via a status endpoint.
+
+_ADD_STATUS: dict = {}
+_ADD_EXCH_TRY = ("TSXV", "TSX", "CSE", "NYSE", "NASDAQ", "ASX")
+
+
+def _ingest_new_ticker(tick: str) -> None:
+    from .db import SessionLocal
+    from .jobs.nightly import run_grades
+    db = SessionLocal()
+    try:
+        c = db.execute(select(models.Company).where(
+            models.Company.ticker == tick)).scalar_one_or_none()
+        if not c:
+            c = models.Company(ticker=tick, exchange="TSXV", name=tick,
+                               commodity="Gold", jurisdiction="",
+                               jurisdiction_tier="Tier 1", project_name="",
+                               shares_outstanding=0)
+            db.add(c)
+            db.flush()
+        data = marketdata.fetch_company_data(tick, c.exchange)
+        if not data["prices"]:
+            for alt in _ADD_EXCH_TRY:
+                if alt == c.exchange:
+                    continue
+                alt_data = marketdata.fetch_company_data(tick, alt)
+                if alt_data["prices"]:
+                    data, c.exchange = alt_data, alt
+                    break
+        if not data["prices"]:
+            db.rollback()
+            _ADD_STATUS[tick] = {"state": "error", "error":
+                f"Couldn't find {tick} on any exchange we cover "
+                f"(TSX / TSX-V / CSE / NYSE / NASDAQ / ASX) - "
+                f"double-check the symbol."}
+            return
+        if data["shares_outstanding"]:
+            c.shares_outstanding = data["shares_outstanding"]
+        have = {p.day for p in db.execute(select(models.DailyPrice).where(
+            models.DailyPrice.company_id == c.id)).scalars()}
+        for row in data["prices"]:
+            if row["date"] not in have:
+                db.add(models.DailyPrice(company_id=c.id, day=row["date"],
+                                         close=row["close"],
+                                         volume=row["volume"]))
+        for sh in data.get("shares_history", []):
+            if not db.execute(select(models.SharesHistory).where(
+                    models.SharesHistory.company_id == c.id,
+                    models.SharesHistory.as_of == sh["as_of"])).scalar_one_or_none():
+                db.add(models.SharesHistory(company_id=c.id,
+                                            as_of=sh["as_of"],
+                                            shares=sh["shares"]))
+        if data["cash"] and data["monthly_burn"]:
+            if not db.execute(select(models.FinancialSnapshot).where(
+                    models.FinancialSnapshot.company_id == c.id)).scalars().first():
+                db.add(models.FinancialSnapshot(
+                    company_id=c.id, as_of=date.today(), cash=data["cash"],
+                    monthly_burn=data["monthly_burn"],
+                    source_filing="Quarterly statements"))
+        db.commit()
+        run_grades(db)
+        _ADD_STATUS[tick] = {"state": "done", "ticker": tick}
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        _ADD_STATUS[tick] = {"state": "error", "error":
+            "The data pull hit a snag - give it another try in a minute."}
+    finally:
+        db.close()
+
+
+class RequestTickerBody(BaseModel):
+    ticker: str
+
+
+@router.post("/api/request-ticker")
+def request_ticker(body: RequestTickerBody, db: Session = Depends(get_db)):
+    import re as _re
+    import threading as _th
+    tick = body.ticker.upper().strip()
+    if not _re.fullmatch(r"[A-Z0-9.\-]{1,8}", tick):
+        return {"error": "That doesn't look like a ticker symbol."}
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == tick)).scalar_one_or_none()
+    if c:
+        has_prices = db.execute(select(models.DailyPrice).where(
+            models.DailyPrice.company_id == c.id).limit(1)).scalar_one_or_none()
+        if has_prices:
+            return {"tracked": True, "ticker": tick}
+    if _ADD_STATUS.get(tick, {}).get("state") == "running":
+        return {"started": True, "ticker": tick}
+    running = sum(1 for v in _ADD_STATUS.values() if v.get("state") == "running")
+    if running >= 3:
+        return {"error": "A few new tickers are already being pulled - "
+                "try again in a minute."}
+    _ADD_STATUS[tick] = {"state": "running"}
+    _th.Thread(target=_ingest_new_ticker, args=(tick,), daemon=True).start()
+    return {"started": True, "ticker": tick}
+
+
+@router.get("/api/request-ticker-status")
+def request_ticker_status(ticker: str):
+    return _ADD_STATUS.get(ticker.upper().strip(), {"state": "unknown"})
