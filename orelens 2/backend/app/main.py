@@ -117,7 +117,8 @@ app.include_router(features_module.router)
 @app.get("/api/scanners/active-drills")
 def active_drills(commodity: str | None = None, tier: str | None = None,
                   db: Session = Depends(get_db)):
-    return scanners.scan_active_drills(db, commodity, tier)
+    from .features import _drop_stale
+    return _drop_stale(db, scanners.scan_active_drills(db, commodity, tier))
 
 
 @app.get("/api/scanners/high-grade-breakouts")
@@ -129,7 +130,8 @@ def high_grade(commodity: str | None = None, tier: str | None = None,
 @app.get("/api/scanners/value-momentum")
 def value_momentum(commodity: str | None = None, tier: str | None = None,
                    db: Session = Depends(get_db)):
-    return scanners.scan_value_momentum(db, commodity, tier)
+    from .features import _drop_stale
+    return _drop_stale(db, scanners.scan_value_momentum(db, commodity, tier))
 
 
 @app.get("/api/tickers/{ticker}")
