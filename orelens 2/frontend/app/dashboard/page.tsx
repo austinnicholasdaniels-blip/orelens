@@ -141,6 +141,7 @@ function DashboardInner() {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Row[]>([]);
   const [adding, setAdding] = useState(false);
+  const [addMsg, setAddMsg] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -183,17 +184,41 @@ function DashboardInner() {
     return () => clearTimeout(t);
   }, [q]);
 
+  const ADD_STEPS = [
+    "Locating the listing\u2026",
+    "Pulling 5 years of prices\u2026",
+    "Reading shares outstanding & cash\u2026",
+    "Grading the balance sheet\u2026",
+  ];
+
   const addTicker = async () => {
+    const tick = q.trim().toUpperCase();
     setAdding(true);
+    setAddMsg(ADD_STEPS[0]);
     try {
-      const r = await fetch(`${API}/api/admin/add-ticker`, {
+      const r = await fetch(`${API}/api/request-ticker`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: q.trim().toUpperCase() }),
+        body: JSON.stringify({ ticker: tick }),
       });
       const d = await r.json();
-      if (d.added) window.location.href = `/ticker/${d.added}`;
-      else alert(d.error || "Could not add ticker");
-    } catch { alert("Could not reach the API"); }
+      if (d.tracked) { window.location.href = `/ticker/${d.ticker}`; return; }
+      if (d.error) { alert(d.error); setAdding(false); return; }
+      // background pull started - poll for up to ~2 minutes
+      for (let poll = 0; poll < 40; poll++) {
+        await new Promise((res) => setTimeout(res, 3000));
+        setAddMsg(ADD_STEPS[Math.min(1 + Math.floor(poll / 4), ADD_STEPS.length - 1)]);
+        let s: Record<string, string> = { state: "running" };
+        try {
+          s = await fetch(`${API}/api/request-ticker-status?ticker=${tick}`).then((x) => x.json());
+        } catch { /* transient - keep polling */ }
+        if (s.state === "done") { window.location.href = `/ticker/${tick}`; return; }
+        if (s.state === "error") {
+          alert(s.error || "Couldn't add that ticker.");
+          setAdding(false); return;
+        }
+      }
+      alert(`Still pulling ${tick}'s history - it'll appear in All Stocks within a couple of minutes.`);
+    } catch { alert("Connection hiccup - give it another try."); }
     setAdding(false);
   };
 
@@ -290,7 +315,7 @@ function DashboardInner() {
               {hits.length === 0 && (
                 <button onClick={addTicker} disabled={adding}
                   className="w-full text-left px-4 py-2 text-sm hover:bg-shale">
-                  {adding ? "Fetching market data..." :
+                  {adding ? addMsg || "Fetching market data..." :
                     `Not tracked yet - add "${q.trim().toUpperCase()}" and pull its data now`}
                 </button>
               )}
