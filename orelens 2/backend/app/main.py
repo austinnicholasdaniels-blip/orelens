@@ -177,6 +177,13 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
         select(models.Financing).where(models.Financing.company_id == c.id)
         .order_by(desc(models.Financing.announced)).limit(10)
     ).scalars().all()
+    # Attribution gate: never display an event whose source headline doesn't
+    # name this issuer (a release about another company is not their financing).
+    from .services.attribution import source_names_company as _names_co
+    fins = [x for x in fins
+            if not x.headline or _names_co(x.headline, c.ticker, c.name, c.exchange)]
+    promos = [p for p in promos
+              if not p.headline or _names_co(p.headline, c.ticker, c.name, c.exchange)]
     shares_hist = db.execute(
         select(models.SharesHistory).where(models.SharesHistory.company_id == c.id)
         .order_by(models.SharesHistory.as_of)
