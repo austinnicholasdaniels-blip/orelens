@@ -189,6 +189,9 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
         .order_by(models.SharesHistory.as_of)
     ).scalars().all()
 
+    from .features import _burn_runway as _brf
+    _br = _brf(db, c.id)
+
     # jurisdiction percentile for the best recent intercept (12-month window)
     comparison = None
     if results:
@@ -237,8 +240,14 @@ def ticker_profile(ticker: str, db: Session = Depends(get_db)):
         "capital": {
             "shares_outstanding": c.shares_outstanding,
             "fully_diluted": fully_diluted,
-            "cash": fin.cash if fin else None,
-            "monthly_burn": fin.monthly_burn if fin else None,
+            "cash": _br["fin"].cash if _br else (fin.cash if fin else None),
+            # effective burn: the SAME number the grade and Assayer use, so a
+            # ticker page can never contradict its own grade line
+            "monthly_burn": (_br["burn"] if _br else
+                             (fin.monthly_burn if fin else None)),
+            "burn_basis": (_br["burn_source"] if _br else None),
+            "runway_m": (round(_br["runway"], 1)
+                         if (_br and _br["runway"]) else None),
             "theoretical_warrant_cash": itm_cash,
         },
         "warrants": [{"strike": w.strike, "expiry": w.expiry.isoformat(),
