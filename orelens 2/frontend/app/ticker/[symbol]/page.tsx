@@ -65,7 +65,20 @@ function TickerInner({ params }: { params: { symbol: string } }) {
             <dt className="text-ash">Shares Outstanding</dt><dd className="font-mono text-right">{fmt.shares(capital.shares_outstanding)}</dd>
             <dt className="text-ash">Fully Diluted</dt><dd className="font-mono text-right">{fmt.shares(capital.fully_diluted)}</dd>
             <dt className="text-ash">Cash Balance</dt><dd className="font-mono text-right">{fmt.money(capital.cash)}</dd>
-            <dt className="text-ash">Monthly Burn</dt><dd className="font-mono text-right">{capital.monthly_burn != null && capital.monthly_burn <= 0 ? <span className="text-oxide">Self-funded</span> : fmt.money(capital.monthly_burn)}</dd>
+            <dt className="text-ash">Monthly Burn</dt>
+            <dd className="font-mono text-right">
+              {capital.monthly_burn == null ? <span className="text-ash">n/a</span>
+                : capital.monthly_burn <= 0 ? <span className="text-oxide">Self-funded</span>
+                : <>{fmt.money(capital.monthly_burn)}
+                    {capital.burn_basis === "cash-trend" && (
+                      <span className="text-ash text-[10px] block">estimated from treasury</span>
+                    )}</>}
+            </dd>
+            <dt className="text-ash">Runway</dt>
+            <dd className="font-mono text-right">
+              {capital.runway_m == null ? <span className="text-ash">n/a</span>
+                : capital.runway_m >= 120 ? "120+ mo" : `${capital.runway_m} mo`}
+            </dd>
             <dt className="text-ash">Theoretical Cash from Warrants</dt><dd className="font-mono text-right text-oxide">{fmt.money(capital.theoretical_warrant_cash)}</dd>
           </dl>
         </div>
