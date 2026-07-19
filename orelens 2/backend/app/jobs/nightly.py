@@ -312,8 +312,10 @@ def run_grades(db: Session) -> None:
                              "graded on overhang and unlock risk only. "
                              + res.rationale)
         elif burn_state == "estimated":
+            _b = effective_burn
+            _bs = (f"${_b/1e6:.1f}M" if _b >= 1e6 else f"${_b/1e3:.0f}k")
             res.rationale = ("Burn estimated from treasury decline "
-                             f"(~${effective_burn/1e3:.0f}k/mo); " + res.rationale)
+                             f"(~{_bs}/mo); " + res.rationale)
 
         existing = db.execute(
             select(DilutionGrade).where(DilutionGrade.company_id == c.id,
