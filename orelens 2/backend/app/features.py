@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
@@ -4310,3 +4311,38 @@ def integrity_report(db: Session = Depends(get_db)):
             "universe": len(companies), "checks": checks,
             "next_step": ("Nothing to do." if not failing else
                           "Run /api/admin/audit-attribution?fix=true")}
+
+
+@router.get("/api/public/ticker/{ticker}")
+def public_ticker(ticker: str, db: Session = Depends(get_db)):
+    """Unauthenticated SEO summary - safe teaser fields only, no member data.
+    Powers server-rendered ticker pages so search engines can index them."""
+    t = ticker.upper().strip()
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == t)).scalar_one_or_none()
+    if not c:
+        return JSONResponse(status_code=404, content={"error": "not tracked"})
+    g = db.execute(select(models.DilutionGrade).where(
+        models.DilutionGrade.company_id == c.id)).scalar_one_or_none()
+    last = db.execute(select(models.DailyPrice).where(
+        models.DailyPrice.company_id == c.id)
+        .order_by(_desc(models.DailyPrice.day)).limit(1)).scalar_one_or_none()
+    br = _burn_runway(db, c.id)
+    hist = db.execute(select(models.SharesHistory).where(
+        models.SharesHistory.company_id == c.id)
+        .order_by(models.SharesHistory.as_of)).scalars().all()
+    growth = None
+    if len(hist) >= 2:
+        yr = [h for h in hist if (hist[-1].as_of - h.as_of).days >= 330]
+        if yr and yr[-1].shares:
+            growth = round((hist[-1].shares / yr[-1].shares - 1) * 100, 1)
+    return {
+        "ticker": t, "name": c.name, "exchange": c.exchange,
+        "commodity": c.commodity, "jurisdiction": c.jurisdiction,
+        "grade": g.grade if g else None,
+        "shares_outstanding": c.shares_outstanding,
+        "latest_close": last.close if last else None,
+        "cash": br["fin"].cash if br else None,
+        "runway_m": round(br["runway"], 1) if (br and br["runway"]) else None,
+        "share_growth_1y": growth,
+    }
