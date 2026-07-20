@@ -1,181 +1,133 @@
-"use client";
-import { useEffect, useState } from "react";
-import DataDisclaimer from "@/components/DataDisclaimer";
-import { getTicker, fmt } from "@/lib/api";
-import TVChart from "@/components/TVChart";
-import WatchButton from "@/components/WatchButton";
-import DilutionGauge from "@/components/DilutionGauge";
-import WarrantOverhangMap from "@/components/WarrantOverhangMap";
-import SharesHistoryChart from "@/components/SharesHistoryChart";
-import CashHistoryChart from "@/components/CashHistoryChart";
-import DrillTimeline from "@/components/DrillTimeline";
-import BetaGate from "@/components/BetaGate";
+import type { Metadata } from "next";
+import TickerClient from "./TickerClient";
 
-export default function TickerPage({ params }: { params: { symbol: string } }) {
-  return <BetaGate><TickerInner params={params} /></BetaGate>;
+const API = process.env.NEXT_PUBLIC_API_URL ?? "https://orelens-api.onrender.com";
+const SITE = "https://getorelens.com";
+
+async function fetchPublic(symbol: string) {
+  try {
+    const r = await fetch(`${API}/api/public/ticker/${symbol}`, {
+      next: { revalidate: 3600 },
+    });
+    if (!r.ok) return null;
+    return r.json();
+  } catch {
+    return null;
+  }
 }
 
-function TickerInner({ params }: { params: { symbol: string } }) {
-  const [data, setData] = useState<any>(null);
-  const [error, setError] = useState("");
+export async function generateMetadata({
+  params,
+}: {
+  params: { symbol: string };
+}): Promise<Metadata> {
+  const t = params.symbol.toUpperCase();
+  const d = await fetchPublic(t);
+  if (!d) {
+    return {
+      title: `${t} — Dilution & Share Structure | OreLens`,
+      description: `Dilution grade, cash runway, warrant overhang, and share-structure history for ${t}, from public filings.`,
+    };
+  }
+  const grade = d.grade ? `Dilution grade ${d.grade}. ` : "";
+  const title = `${d.name} (${t}) Dilution, Cash Runway & Share Structure | OreLens`;
+  const description = `${grade}${d.name} (${d.exchange}: ${t}) — ${d.commodity} ${d.jurisdiction ? "in " + d.jurisdiction : ""}. Cash runway, warrant overhang, financing unlocks, and share-count history from public filings. ${d.shares_outstanding ? (d.shares_outstanding / 1e6).toFixed(0) + "M shares outstanding." : ""}`.trim();
+  return {
+    title,
+    description,
+    alternates: { canonical: `${SITE}/ticker/${t}` },
+    openGraph: {
+      title,
+      description,
+      url: `${SITE}/ticker/${t}`,
+      siteName: "OreLens",
+      images: [{ url: "/og.png", width: 1200, height: 630 }],
+      type: "website",
+    },
+    twitter: { card: "summary_large_image", title, description, images: ["/og.png"] },
+  };
+}
 
-  useEffect(() => {
-    getTicker(params.symbol).then(setData).catch(() => setError("Ticker not found or API offline."));
-  }, [params.symbol]);
+export default async function TickerPage({
+  params,
+}: {
+  params: { symbol: string };
+}) {
+  const t = params.symbol.toUpperCase();
+  const d = await fetchPublic(t);
 
-  if (error) return <p className="text-hazard">{error}</p>;
-  if (!data) return <p className="text-ash">Loading core samples…</p>;
-
-  const { company, prices, grade, capital, warrants, program, drill_results, comparison } = data;
-  const ds = data.dilution_stats ?? {};
-  const financings = data.financings ?? [];
-  const promotions = data.promotions ?? [];
-  const activePromo = promotions.find((p: any) => p.active);
-  const today = new Date();
-  const upcoming = financings.filter((f: any) => f.closed && f.hold_expiry && new Date(f.hold_expiry) >= today);
-  const daysTo = (d: string) => Math.ceil((new Date(d).getTime() - today.getTime()) / 86400000);
+  // JSON-LD structured data for rich search results
+  const jsonLd = d
+    ? {
+        "@context": "https://schema.org",
+        "@type": "Corporation",
+        name: d.name,
+        tickerSymbol: t,
+        description: `${d.commodity} company${d.jurisdiction ? " in " + d.jurisdiction : ""}, tracked on OreLens for dilution risk and share structure.`,
+      }
+    : null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-baseline gap-4 flex-wrap">
-        <h1 className="font-display text-4xl tracking-wide">
-          {company.ticker}<span className="text-ash text-2xl">.{company.exchange}</span>
-        </h1>
-        <span className="text-bone/90">{company.name}</span>
-        <span className="text-ash text-sm">{company.project} · {company.commodity} · {company.jurisdiction}</span>
-        <span className={`text-xs uppercase tracking-widest ${company.jurisdiction_tier === "Tier 1" ? "text-oxide" : "text-hazard"}`}>
-          {company.jurisdiction_tier}
-        </span>
-        <WatchButton ticker={company.ticker} />
-      </div>
+    <>
+      {jsonLd && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      )}
 
-      <TVChart ticker={company.ticker} exchange={company.exchange} />
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          <DilutionGauge grade={grade} />
-          <WarrantOverhangMap warrants={warrants} />
-          <SharesHistoryChart history={data.shares_history} />
-          <CashHistoryChart history={data.cash_history} />
-        </div>
-        <div className="space-y-6 h-fit">
-        <div className="bg-tray border border-seam rounded-sm p-4">
-          <p className="text-xs uppercase tracking-widest text-ash mb-3">Capital Structure</p>
-          <dl className="grid grid-cols-2 gap-y-3 text-sm">
-            <dt className="text-ash">Shares Outstanding</dt><dd className="font-mono text-right">{fmt.shares(capital.shares_outstanding)}</dd>
-            <dt className="text-ash">Fully Diluted</dt><dd className="font-mono text-right">{fmt.shares(capital.fully_diluted)}</dd>
-            <dt className="text-ash">Cash Balance</dt><dd className="font-mono text-right">{fmt.money(capital.cash)}</dd>
-            <dt className="text-ash">Monthly Burn</dt>
-            <dd className="font-mono text-right">
-              {capital.monthly_burn == null ? <span className="text-ash">n/a</span>
-                : capital.monthly_burn <= 0 ? <span className="text-oxide">Self-funded</span>
-                : <>{fmt.money(capital.monthly_burn)}
-                    {capital.burn_basis === "cash-trend" && (
-                      <span className="text-ash text-[10px] block">estimated from treasury</span>
-                    )}</>}
-            </dd>
-            <dt className="text-ash">Runway</dt>
-            <dd className="font-mono text-right">
-              {capital.runway_m == null ? <span className="text-ash">n/a</span>
-                : capital.runway_m >= 120 ? "120+ mo" : `${capital.runway_m} mo`}
-            </dd>
-            <dt className="text-ash">Theoretical Cash from Warrants</dt><dd className="font-mono text-right text-oxide">{fmt.money(capital.theoretical_warrant_cash)}</dd>
-          </dl>
-        </div>
-
-        <div className="bg-tray border border-seam rounded-sm p-4">
-          <p className="text-xs uppercase tracking-widest text-ash mb-3">Dilution Profile</p>
-          <dl className="grid grid-cols-2 gap-y-3 text-sm">
-            <dt className="text-ash">Share Growth (1y)</dt>
-            <dd className={`font-mono text-right ${(ds.shares_growth_1y_pct ?? 0) > 10 ? "text-hazard" : ""}`}>
-              {ds.shares_growth_1y_pct != null ? `+${ds.shares_growth_1y_pct}%` : "\u2014"}</dd>
-            <dt className="text-ash">Share Growth (3y)</dt>
-            <dd className={`font-mono text-right ${(ds.shares_growth_3y_pct ?? 0) > 30 ? "text-hazard" : ""}`}>
-              {ds.shares_growth_3y_pct != null ? `+${ds.shares_growth_3y_pct}%` : "\u2014"}</dd>
-            <dt className="text-ash">Ownership Drag (3y)</dt>
-            <dd className="font-mono text-right text-hazard">
-              {ds.ownership_drag_3y_pct != null ? `\u2212${ds.ownership_drag_3y_pct}%` : "\u2014"}</dd>
-            <dt className="text-ash">Est. Capital Raised (3y)</dt>
-            <dd className="font-mono text-right">
-              {ds.est_capital_raised_3y_m != null ? `$${ds.est_capital_raised_3y_m}M` : "\u2014"}</dd>
-            <dt className="text-ash">Runway</dt>
-            <dd className="font-mono text-right">
-              {(() => {
-                const v = ds.adjusted_runway_m ?? ds.runway_m;
-                if (v == null) return "\u2014";
-                if (v >= 999) return <span className="text-oxide">Self-funded - no net burn</span>;
-                if (v >= 900) return <span className="text-ash">n/a - filings too thin to measure</span>;
-                const label = v >= 120 ? "120+ mo" : `${v} mo`;
-                return ds.adjusted_runway_m != null
-                  ? `${label} (incl. $${ds.raised_since_snapshot_m}M raised)` : label;
-              })()}</dd>
-          </dl>
-          {(ds.raise_events_3y ?? []).length > 0 && (
-            <div className="mt-3 pt-3 border-t border-seam">
-              <p className="text-xs uppercase tracking-widest text-ash mb-2">Issuance Events (3y)</p>
-              {ds.raise_events_3y.map((e: any, i: number) => (
-                <div key={i} className="flex items-baseline gap-3 text-xs py-1">
-                  <span className="font-mono text-ash">{e.date}</span>
-                  <span className="text-hazard">+{e.pct}%</span>
-                  <span className="text-ash">{e.shares_added_m}M shares</span>
-                  {e.est_raised_m != null && (
-                    <span className="ml-auto font-mono">~${e.est_raised_m}M</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {activePromo && (
-          <div className="bg-tray border border-hazard rounded-sm p-4">
-            <p className="text-xs uppercase tracking-widest text-hazard mb-2">&#9888; Active Stock Promotion</p>
-            <p className="text-sm">
-              {activePromo.amount
-                ? `Disclosed paid promotion: $${Number(activePromo.amount).toLocaleString()}`
-                : "Disclosed paid promotion (amount not stated in disclosure headline)"}
-            </p>
-            <a href={activePromo.url} target="_blank" rel="noopener noreferrer" className="text-xs text-assay hover:underline">disclosure</a>
-          </div>
-        )}
-        <div className="bg-tray border border-seam rounded-sm p-4">
-          <p className="text-xs uppercase tracking-widest text-ash mb-3">Financings &amp; Unlocks</p>
-          {upcoming.map((f: any, i: number) => (
-            <div key={`u${i}`} className={`mb-3 px-3 py-2 rounded-sm border text-sm ${daysTo(f.hold_expiry) <= 14 ? "border-hazard text-hazard" : "border-assay text-assay"}`}>
-              &#9888; {f.amount && f.price ? `~${(f.amount / f.price / 1e6).toFixed(1)}M shares` : "Placement paper"} free-trading on <span className="font-mono">{f.hold_expiry}</span> ({daysTo(f.hold_expiry)}d)
-            </div>
-          ))}
-          <DataDisclaimer variant="events" className="mt-0 mb-3 pt-0 border-t-0" />
-          {financings.length === 0 && (
-            <p className="text-ash text-sm">No financings detected in the last several months of news.</p>
-          )}
-          {financings.map((f: any, i: number) => (
-            <div key={i} className="border-t border-seam py-2 text-sm flex flex-wrap items-baseline gap-x-3">
-              <span className="capitalize">{f.kind}</span>
-              <span className="font-mono">{f.amount ? `$${(f.amount / 1e6).toFixed(1)}M` : "\u2014"}</span>
-              {f.price != null && <span className="text-ash">@ ${f.price}</span>}
-              {f.warrant_strike != null && <span className="text-ash">wt ${f.warrant_strike}</span>}
-              <span className={`text-xs uppercase tracking-widest ${f.closed ? "text-oxide" : "text-ash"}`}>
-                {f.closed ? `Closed ${f.close_date ?? ""}` : `Announced ${f.announced}`}
+      {/* Public, crawlable SEO summary - real content for search engines and
+          a hook for searchers. The full interactive terminal is gated below. */}
+      {d && (
+        <section className="mb-8">
+          <div className="flex items-baseline gap-3 flex-wrap">
+            <h1 className="font-display text-4xl tracking-wide">
+              {d.name}
+              <span className="text-ash text-2xl ml-2">
+                {d.exchange}: {t}
               </span>
-              {f.closed && f.hold_expiry && (
-                <span className="text-xs text-ash">free-trading {f.hold_expiry}</span>
-              )}
-              <a href={f.url} target="_blank" rel="noopener noreferrer"
-                 className="text-xs text-assay hover:underline ml-auto">source &#8599;</a>
-              {f.headline && (
-                <span className="w-full text-xs text-ash mt-0.5 italic">
-                  from: {f.headline}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-        </div>
-      </div>
+            </h1>
+            {d.grade && (
+              <span className="border border-assay text-assay rounded-sm px-2 py-0.5 font-display text-xl">
+                {d.grade}
+              </span>
+            )}
+          </div>
+          <p className="text-ash mt-1">
+            {d.commodity}
+            {d.jurisdiction ? ` · ${d.jurisdiction}` : ""}
+          </p>
 
-      <DrillTimeline program={program} results={drill_results} comparison={comparison} />
-      <DataDisclaimer variant="ticker" />
-    </div>
+          <div className="grid sm:grid-cols-3 gap-3 mt-5">
+            {[
+              ["Dilution Grade", d.grade ?? "—"],
+              ["Shares Outstanding", d.shares_outstanding ? `${(d.shares_outstanding / 1e6).toFixed(1)}M` : "—"],
+              ["Cash Runway", d.runway_m == null ? "n/a" : d.runway_m >= 120 ? "120+ mo" : `${d.runway_m} mo`],
+              ["1-Yr Share Growth", d.share_growth_1y != null ? `${d.share_growth_1y > 0 ? "+" : ""}${d.share_growth_1y}%` : "—"],
+              ["Latest Close", d.latest_close != null ? `$${d.latest_close}` : "—"],
+              ["Cash on Hand", d.cash != null ? `$${(d.cash / 1e6).toFixed(1)}M` : "—"],
+            ].map(([k, v]) => (
+              <div key={k as string} className="bg-tray border border-seam rounded-sm p-3">
+                <p className="text-ash text-xs">{k}</p>
+                <p className="font-mono text-lg mt-0.5">{v}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-bone/85 mt-5 leading-relaxed max-w-3xl">
+            {d.name} ({d.exchange}: {t}) is a {d.commodity.toLowerCase()} company
+            {d.jurisdiction ? ` operating in ${d.jurisdiction}` : ""}. OreLens
+            tracks its dilution risk, cash runway, warrant overhang, private-placement
+            unlocks, and full share-count history — computed from public filings and
+            refreshed nightly. {d.grade ? `Its current dilution grade is ${d.grade}.` : ""}{" "}
+            The full interactive terminal — charts, the unlock calendar, financing
+            history, and drill results — is available to members below.
+          </p>
+        </section>
+      )}
+
+      {/* The gated interactive terminal */}
+      <TickerClient params={params} />
+    </>
   );
 }
