@@ -4266,10 +4266,8 @@ def audit_attribution(fix: bool = False, db: Session = Depends(get_db)):
             "note": "Add ?fix=true to delete these rows."}
 
 
-@router.get("/api/admin/integrity-report")
-def integrity_report(db: Session = Depends(get_db)):
-    """One call: is the data safe to show members? Combines attribution,
-    freshness, burn evidence, and name hygiene into a single verdict."""
+def _integrity_check(db) -> dict:
+    """Shared integrity logic (used by the report route and one-click update)."""
     from .services.attribution import (source_names_company as _names_co,
                                        distinctive_tokens as _tok)
     companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
@@ -4313,6 +4311,13 @@ def integrity_report(db: Session = Depends(get_db)):
                           "Run /api/admin/audit-attribution?fix=true")}
 
 
+@router.get("/api/admin/integrity-report")
+def integrity_report(db: Session = Depends(get_db)):
+    """Is the data safe to show members? Attribution, freshness, burn
+    evidence, and name hygiene in one verdict."""
+    return _integrity_check(db)
+
+
 @router.get("/api/public/ticker/{ticker}")
 def public_ticker(ticker: str, db: Session = Depends(get_db)):
     """Unauthenticated SEO summary - safe teaser fields only, no member data.
@@ -4346,3 +4351,91 @@ def public_ticker(ticker: str, db: Session = Depends(get_db)):
         "runway_m": round(br["runway"], 1) if (br and br["runway"]) else None,
         "share_growth_1y": growth,
     }
+
+
+# ===================== ONE-CLICK MAINTENANCE =====================
+# Everything the platform needs, in the right order, from a single button.
+
+_MAINT: dict = {"state": "idle"}
+
+
+def _run_maintenance() -> None:
+    import asyncio
+    from datetime import datetime as _dt
+    from .db import SessionLocal
+    from .jobs.nightly import run_nightly
+    steps, details = [], {}
+    _MAINT.clear()
+    _MAINT.update({"state": "running", "started": _dt.utcnow().isoformat(),
+                   "progress": "Refreshing prices, filings, news and grades..."})
+    # 1) full data refresh (prices, filings, newswires, financings,
+    #    promotions, misattribution purge, grades) - stages self-isolate
+    try:
+        res = asyncio.run(run_nightly())
+        details["refresh"] = res
+        wire = (res.get("newswire") or {}).get("stored", 0)
+        steps.append(f"Data refreshed - prices, filings and {wire} new releases processed")
+        hyg = res.get("hygiene") or {}
+        removed = (hyg.get("financings", 0) + hyg.get("promotions", 0))
+        steps.append(f"Source check - {removed} misattributed event(s) removed"
+                     if removed else "Source check - no misattributed events found")
+        if res.get("errors"):
+            steps.append(f"Note: some stages reported issues: {list(res['errors'])}")
+    except Exception as exc:  # noqa: BLE001
+        steps.append(f"Data refresh failed: {str(exc)[:120]}")
+        details["refresh_error"] = str(exc)[:300]
+
+    db = SessionLocal()
+    try:
+        # 2) grades are recomputed inside the refresh; report the count
+        _MAINT["progress"] = "Checking data integrity..."
+        n_grades = len(db.execute(select(models.DilutionGrade)).scalars().all())
+        steps.append(f"Grades recomputed for {n_grades} companies")
+
+        # 3) integrity verdict
+        rep = _integrity_check(db)
+        details["integrity"] = rep
+        steps.append(f"Integrity check - {rep['verdict']}")
+        for c in rep["checks"]:
+            if c["status"] in ("FAIL", "WARN"):
+                steps.append(f"  - {c['check']}: {c['status']} ({c['count']})")
+
+        # 4) dead-ticker report (auto-hidden already; surfaced for your call)
+        stale = sorted(_stale_tickers(db))
+        details["stale_tickers"] = stale
+        steps.append(f"Inactive tickers auto-hidden: {len(stale)}"
+                     + (f" ({', '.join(stale[:6])})" if stale else ""))
+    except Exception as exc:  # noqa: BLE001
+        steps.append(f"Integrity stage failed: {str(exc)[:120]}")
+    finally:
+        db.close()
+
+    _MAINT.update({"state": "done", "finished": _dt.utcnow().isoformat(),
+                   "summary": steps, "details": details,
+                   "progress": "Complete."})
+
+
+@router.post("/api/admin/run-everything")
+def run_everything():
+    """ONE-CLICK UPDATE. Runs the complete maintenance routine in order:
+    (1) refresh all market data, filings, news, financings and promotions,
+    (2) purge any misattributed events, (3) recompute every dilution grade,
+    (4) run the data-integrity check, (5) report inactive tickers.
+
+    Takes several minutes. Returns immediately - poll
+    GET /api/admin/run-everything-status for progress and the final report.
+    """
+    import threading
+    if _MAINT.get("state") == "running":
+        return {"started": False, "already_running": True,
+                "progress": _MAINT.get("progress")}
+    threading.Thread(target=_run_maintenance, daemon=True).start()
+    return {"started": True,
+            "check_progress": "GET /api/admin/run-everything-status",
+            "expect": "3-10 minutes"}
+
+
+@router.get("/api/admin/run-everything-status")
+def run_everything_status():
+    """Progress and plain-English report from the last one-click update."""
+    return _MAINT
