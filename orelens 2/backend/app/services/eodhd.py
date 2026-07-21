@@ -120,6 +120,7 @@ def fetch_company_data(ticker: str, exchange: str, period: str = "6mo") -> dict:
         gex = (gen.get("Exchange") or "").upper()
         if "NASDAQ" in gex:
             out["resolved_exchange"] = "NASDAQ"
+    out["name"] = gen.get("Name")
     out["sector"] = gen.get("Sector")
     out["industry"] = gen.get("Industry")
     desc = gen.get("Description")
