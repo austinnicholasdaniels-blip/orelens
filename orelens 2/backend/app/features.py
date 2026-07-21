@@ -4080,7 +4080,7 @@ def _ingest_new_ticker(tick: str) -> None:
             models.Company.ticker == tick)).scalar_one_or_none()
         if not c:
             c = models.Company(ticker=tick, exchange="TSXV", name=tick,
-                               commodity="Gold", jurisdiction="",
+                               commodity="Unknown", jurisdiction="",
                                jurisdiction_tier="Tier 1", project_name="",
                                shares_outstanding=0)
             db.add(c)
@@ -4101,6 +4101,17 @@ def _ingest_new_ticker(tick: str) -> None:
                 f"(TSX / TSX-V / CSE / NYSE / NASDAQ / ASX) - "
                 f"double-check the symbol."}
             return
+        # identity from the data provider, not from defaults
+        from .services.classify import infer_commodity as _infer
+        if data.get("name") and (not c.name or c.name == tick):
+            c.name = str(data["name"])[:120]
+        if c.commodity in (None, "", "Unknown", "Gold"):
+            guess = _infer(c.name or tick, data.get("description") or "",
+                           data.get("industry") or "")
+            if guess:
+                c.commodity = guess
+            elif not c.commodity:
+                c.commodity = "Unknown"
         if data["shares_outstanding"]:
             c.shares_outstanding = data["shares_outstanding"]
         have = {p.day for p in db.execute(select(models.DailyPrice).where(
@@ -4439,3 +4450,35 @@ def run_everything():
 def run_everything_status():
     """Progress and plain-English report from the last one-click update."""
     return _MAINT
+
+
+@router.get("/api/admin/audit-classification")
+def audit_classification(fix: bool = False, db: Session = Depends(get_db)):
+    """Find companies whose stored commodity conflicts with their own name -
+    e.g. 'Copper Giant' filed under Gold. fix=true corrects the unambiguous
+    ones (name states exactly one commodity); ambiguous names like
+    'X Gold & Silver' are always left for a human."""
+    from .services.classify import name_states_commodity as _nsc, looks_non_mining
+    conflicts, ambiguous, non_mining = [], [], []
+    for c in db.execute(select(models.Company)).scalars():
+        stated = _nsc(c.name or "")
+        if stated and stated != c.commodity:
+            row = {"ticker": c.ticker, "name": c.name,
+                   "stored": c.commodity, "name_says": stated}
+            conflicts.append(row)
+            if fix:
+                c.commodity = stated
+        elif not stated and c.commodity in (None, "", "Unknown"):
+            ambiguous.append({"ticker": c.ticker, "name": c.name,
+                              "stored": c.commodity})
+        if looks_non_mining(c.name or "", "", c.commodity or ""):
+            non_mining.append({"ticker": c.ticker, "name": c.name,
+                               "commodity": c.commodity})
+    if fix:
+        db.commit()
+    return {"dry_run": not fix, "corrected" if fix else "conflicts": conflicts,
+            "needs_review_unknown": ambiguous,
+            "possible_non_mining": non_mining,
+            "note": ("Add ?fix=true to apply the corrections."
+                     if not fix else
+                     "Run /api/admin/regrade to refresh grade rationales.")}
