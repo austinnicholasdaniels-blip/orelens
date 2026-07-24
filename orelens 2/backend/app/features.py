@@ -4482,3 +4482,49 @@ def audit_classification(fix: bool = False, db: Session = Depends(get_db)):
             "note": ("Add ?fix=true to apply the corrections."
                      if not fix else
                      "Run /api/admin/regrade to refresh grade rationales.")}
+
+
+@router.get("/api/scanners/chart-data")
+def chart_data(tickers: str, days: int = 180, db: Session = Depends(get_db)):
+    """Compact price series for many tickers in one call - powers the scanner's
+    chart view. One query for the whole set, not one per ticker."""
+    from datetime import timedelta as _td
+    want = [t.strip().upper() for t in tickers.split(",") if t.strip()][:60]
+    if not want:
+        return {}
+    days = max(20, min(days, 400))
+    companies = {c.id: c for c in db.execute(select(models.Company).where(
+        models.Company.ticker.in_(want))).scalars()}
+    if not companies:
+        return {}
+    max_day = db.execute(select(func.max(models.DailyPrice.day))).scalar()
+    if not max_day:
+        return {}
+    cutoff = max_day - _td(days=days)
+    rows = db.execute(
+        select(models.DailyPrice.company_id, models.DailyPrice.day,
+               models.DailyPrice.close, models.DailyPrice.volume)
+        .where(models.DailyPrice.company_id.in_(companies.keys()),
+               models.DailyPrice.day >= cutoff)
+        .order_by(models.DailyPrice.company_id, models.DailyPrice.day)).all()
+    grades = {g.company_id: g.grade for g in db.execute(
+        select(models.DilutionGrade).where(
+            models.DilutionGrade.company_id.in_(companies.keys()))).scalars()}
+
+    series: dict[str, dict] = {}
+    for cid, day, close, vol in rows:
+        c = companies[cid]
+        s = series.setdefault(c.ticker, {
+            "name": c.name, "exchange": c.exchange, "commodity": c.commodity,
+            "grade": grades.get(cid), "closes": [], "vols": [], "first_day": str(day)})
+        s["closes"].append(round(close, 4) if close else None)
+        s["vols"].append(vol or 0)
+    for t, s in series.items():
+        cl = [x for x in s["closes"] if x]
+        s["last"] = cl[-1] if cl else None
+        s["period_pct"] = (round((cl[-1] / cl[0] - 1) * 100, 1)
+                           if len(cl) >= 2 and cl[0] else None)
+        s["day_pct"] = (round((cl[-1] / cl[-2] - 1) * 100, 1)
+                        if len(cl) >= 2 and cl[-2] else None)
+        s["last_day"] = str(max_day)
+    return series
