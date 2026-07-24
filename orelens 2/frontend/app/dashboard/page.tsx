@@ -2,6 +2,7 @@
 // build: sidebar-v2
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ChartGrid from "@/components/ChartGrid";
 import DataDisclaimer from "@/components/DataDisclaimer";
 import { getScanner } from "@/lib/api";
 import GradeChip from "@/components/GradeChip";
@@ -139,6 +140,7 @@ function DashboardInner() {
       .then((s) => s?.active && setSpot(s)).catch(() => {});
   }, []);
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "", dir: -1 });
+  const [view, setView] = useState<"table" | "charts">("table");
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Row[]>([]);
@@ -346,6 +348,20 @@ function DashboardInner() {
 
       {error && <p className="text-hazard text-sm mb-4">{error}</p>}
 
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-ash text-xs uppercase tracking-[0.2em] mr-1">View</span>
+        {(["table", "charts"] as const).map((v) => (
+          <button key={v} onClick={() => setView(v)}
+            className={`font-display tracking-wide text-sm px-3 py-1 rounded-sm border ${
+              view === v ? "border-assay text-assay bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+            {v === "table" ? "Table" : "Charts"}
+          </button>
+        ))}
+      </div>
+
+      {view === "charts" ? (
+        <ChartGrid tickers={spotlightOrdered.map((r: Row) => r.ticker).filter(Boolean)} />
+      ) : (
       <table className="core-tray w-full">
         <thead>
           <tr>
@@ -435,6 +451,7 @@ function DashboardInner() {
           )}
         </tbody>
       </table>
+      )}
 
       <DataDisclaimer variant="scanner" />
     </div>
