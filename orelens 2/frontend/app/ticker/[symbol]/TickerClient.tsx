@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import DataDisclaimer from "@/components/DataDisclaimer";
 import { getTicker, fmt } from "@/lib/api";
 import TVChart from "@/components/TVChart";
+import PriceChart from "@/components/PriceChart";
 import WatchButton from "@/components/WatchButton";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
@@ -13,6 +14,38 @@ import BetaGate from "@/components/BetaGate";
 
 export default function TickerClient({ params }: { params: { symbol: string } }) {
   return <BetaGate><TickerInner params={params} /></BetaGate>;
+}
+
+function ChartToggle({ ticker, exchange, prices }: {
+  ticker: string; exchange: string;
+  prices: { time: string; value: number; volume: number;
+            open?: number; high?: number; low?: number }[];
+}) {
+  const [src, setSrc] = useState<"orelens" | "live">("orelens");
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-ash text-xs uppercase tracking-[0.2em] mr-1">Chart</span>
+        {([["orelens", "OreLens Candles"], ["live", "Live (TradingView)"]] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setSrc(k)}
+            className={`font-display tracking-wide text-sm px-3 py-1 rounded-sm border ${
+              src === k ? "border-assay text-assay bg-tray" : "border-seam text-ash hover:text-bone"}`}>
+            {label}
+          </button>
+        ))}
+        {src === "orelens" && (
+          <span className="text-ash text-xs ml-auto">
+            End-of-day candles from OreLens data · gold = 50-day, grey = 200-day MA
+          </span>
+        )}
+      </div>
+      {src === "orelens"
+        ? (prices.length > 1
+            ? <div className="border border-seam rounded-sm overflow-hidden"><PriceChart prices={prices} /></div>
+            : <p className="text-ash text-sm py-8 text-center border border-seam rounded-sm">Not enough price history yet.</p>)
+        : <TVChart ticker={ticker} exchange={exchange} />}
+    </div>
+  );
 }
 
 function TickerInner({ params }: { params: { symbol: string } }) {
@@ -49,7 +82,11 @@ function TickerInner({ params }: { params: { symbol: string } }) {
         <WatchButton ticker={company.ticker} />
       </div>
 
-      <TVChart ticker={company.ticker} exchange={company.exchange} />
+      <ChartToggle
+        ticker={company.ticker}
+        exchange={company.exchange}
+        prices={data.prices ?? []}
+      />
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-6">
