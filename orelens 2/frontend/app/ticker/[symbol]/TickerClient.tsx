@@ -4,6 +4,7 @@ import DataDisclaimer from "@/components/DataDisclaimer";
 import { getTicker, fmt } from "@/lib/api";
 import TVChart from "@/components/TVChart";
 import PriceChart from "@/components/PriceChart";
+import DilutionStory from "@/components/DilutionStory";
 import WatchButton from "@/components/WatchButton";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
@@ -87,6 +88,10 @@ function TickerInner({ params }: { params: { symbol: string } }) {
         exchange={company.exchange}
         prices={data.prices ?? []}
       />
+
+      <div className="mt-6">
+        <DilutionStory ticker={company.ticker} />
+      </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-6">
