@@ -4971,77 +4971,95 @@ def _dilution_cohort_study(db, months: int = 12) -> dict:
     return out
 
 
-@router.get("/api/track-record")
-def track_record(window: int = 30, db: Session = Depends(get_db)):
-    """What actually happened to holders around the financings we tracked.
-    Computed across EVERY financing with sufficient price history - not a
-    hand-picked highlight reel. Includes the losers and the non-events."""
-    from datetime import timedelta as _td
-    from .services.attribution import source_names_company as _names_co
-    window = max(5, min(window, 90))
-    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
-    cases: list[dict] = []
+def _drawdown_study(db) -> dict:
+    """From each company's FIRST dilution announcement onward.
 
+    One row per company (deduped): anchor on the earliest attributable
+    financing announcement, then find the deepest close after it. Reports both
+    the maximum drawdown (a risk measure) and where the price trades today, so
+    the worst point is never mistaken for the end state.
+    """
+    from .services.attribution import source_names_company as _names_co
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+    first_fin: dict = {}
     for fin in db.execute(select(models.Financing)).scalars():
         c = companies.get(fin.company_id)
         if not c or not fin.announced:
             continue
-        # attribution gate: never cite an event that isn't provably theirs
         if fin.headline and not _names_co(fin.headline, c.ticker, c.name,
                                           c.exchange):
             continue
-        d0 = fin.announced
+        cur = first_fin.get(fin.company_id)
+        if cur is None or fin.announced < cur.announced:
+            first_fin[fin.company_id] = fin
+
+    rows = []
+    for cid, fin in first_fin.items():
+        c = companies[cid]
         prices = db.execute(
             select(models.DailyPrice.day, models.DailyPrice.close)
-            .where(models.DailyPrice.company_id == c.id,
-                   models.DailyPrice.day >= d0 - _td(days=10),
-                   models.DailyPrice.day <= d0 + _td(days=window + 5))
+            .where(models.DailyPrice.company_id == cid)
             .order_by(models.DailyPrice.day)).all()
-        before = [p for p in prices if p[0] <= d0 and p[1]]
-        after = [p for p in prices if p[0] >= d0 + _td(days=window - 5) and p[1]]
-        if not before or not after:
+        px = [(d, v) for d, v in prices if v]
+        if len(px) < 5:
             continue
-        p_before, p_after = before[-1][1], after[0][1]
-        if not p_before:
+        before = [p for p in px if p[0] <= fin.announced]
+        after = [p for p in px if p[0] > fin.announced]
+        if not before or len(after) < 3:
             continue
-        change = round((p_after / p_before - 1) * 100, 1)
-        cases.append({
+        anchor_day, anchor = before[-1]
+        trough_day, trough = min(after, key=lambda p: p[1])
+        last_day, last = after[-1]
+        if not anchor:
+            continue
+        rows.append({
             "ticker": c.ticker, "name": c.name, "exchange": c.exchange,
-            "announced": str(d0), "kind": fin.kind,
-            "amount": fin.amount,
-            "price_before": round(p_before, 4), "price_after": round(p_after, 4),
-            "change_pct": change,
+            "commodity": c.commodity, "announced": str(fin.announced),
+            "kind": fin.kind or "financing", "amount": fin.amount,
             "headline": (fin.headline or "")[:140], "source": fin.source_url,
+            "anchor_price": round(anchor, 4), "anchor_day": str(anchor_day),
+            "trough_price": round(trough, 4), "trough_day": str(trough_day),
+            "days_to_trough": (trough_day - anchor_day).days,
+            "max_drawdown_pct": round((trough / anchor - 1) * 100, 1),
+            "price_today": round(last, 4), "today_day": str(last_day),
+            "change_since_pct": round((last / anchor - 1) * 100, 1),
         })
 
-    cohort = _dilution_cohort_study(db)
-    if not cases:
-        return {"cases": 0, "window_days": window, "cohort": cohort,
-                "note": ("Financing-event history is still accumulating; the "
-                         "share-count study below uses filings already on "
-                         "file.")}
+    if len(rows) < 3:
+        return {"companies": len(rows), "enough_data": False}
 
-    changes = sorted(c["change_pct"] for c in cases)
-    n = len(changes)
-    median = changes[n // 2] if n % 2 else round((changes[n // 2 - 1] + changes[n // 2]) / 2, 1)
-    fell = len([x for x in changes if x < 0])
-    fell_hard = len([x for x in changes if x <= -20])
-    worst = sorted(cases, key=lambda x: x["change_pct"])[:12]
+    dd = sorted(r["max_drawdown_pct"] for r in rows)
+    n = len(dd)
+    median = dd[n // 2] if n % 2 else round((dd[n // 2 - 1] + dd[n // 2]) / 2, 1)
+    still_down = [r for r in rows if r["change_since_pct"] < 0]
+    days = sorted(r["days_to_trough"] for r in rows)
     return {
-        "cases": n, "window_days": window, "cohort": cohort,
-        "median_change_pct": median,
-        "average_change_pct": round(sum(changes) / n, 1),
-        "share_that_fell_pct": round(fell / n * 100, 1),
-        "share_that_fell_20plus_pct": round(fell_hard / n * 100, 1),
-        "best_change_pct": changes[-1], "worst_change_pct": changes[0],
-        "worst_cases": worst,
+        "companies": n, "enough_data": True,
+        "median_max_drawdown_pct": median,
+        "worst_drawdown_pct": dd[0],
+        "share_down_20plus_pct": round(len([x for x in dd if x <= -20]) / n * 100, 1),
+        "share_down_40plus_pct": round(len([x for x in dd if x <= -40]) / n * 100, 1),
+        "share_still_below_pct": round(len(still_down) / n * 100, 1),
+        "median_days_to_trough": days[n // 2],
+        "cases": sorted(rows, key=lambda r: r["max_drawdown_pct"])[:15],
         "methodology": (
-            f"For every financing OreLens tracked, we compare the last close "
-            f"on or before the announcement to the first close about {window} "
-            f"days later, using our own stored end-of-day prices. Every "
-            f"qualifying event is included - winners, losers and non-events. "
-            f"Events whose source headline does not name the issuer are "
-            f"excluded. This measures what happened around these events; it "
-            f"does not prove the financing caused the move, and it is not a "
-            f"prediction of future results."),
+            "One entry per company. We anchor on the earliest financing "
+            "announcement OreLens attributed to that issuer, take the last "
+            "close on or before that date, then find the lowest close at any "
+            "point afterward. 'Maximum drawdown' is that worst point - a risk "
+            "measure, not a typical outcome, which is why each row also shows "
+            "where the price trades today. Every company with an attributable "
+            "announcement and sufficient price history is included; events "
+            "whose source headline does not name the issuer are excluded. "
+            "This shows what happened, not what caused it, and past patterns "
+            "do not predict future results."),
     }
+
+
+@router.get("/api/track-record")
+def track_record(db: Session = Depends(get_db)):
+    """The receipts: drawdown from each company's first dilution announcement,
+    plus the share-count cohort study. Both computed, neither curated."""
+    return {"drawdown": _drawdown_study(db),
+            "cohort": _dilution_cohort_study(db)}
+
