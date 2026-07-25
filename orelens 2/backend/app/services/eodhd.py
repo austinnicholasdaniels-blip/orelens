@@ -211,3 +211,43 @@ def fetch_news(ticker: str, exchange: str, days: int = 5, limit: int = 25) -> li
                           "summary": (r.get("content") or "")[:2000],
                           "wire": "EODHD"})
     return items
+
+
+# ---------------------------------------------------------------- discovery
+MINING_INDUSTRIES = [
+    "Gold", "Silver", "Copper", "Uranium", "Aluminum", "Steel",
+    "Other Precious Metals & Mining", "Other Industrial Metals & Mining",
+    "Coking Coal", "Thermal Coal",
+]
+
+# EODHD exchange codes -> our internal exchange labels
+DISCOVER_EXCHANGES = {"TO": "TSX", "V": "TSXV", "CN": "CSE",
+                      "US": "NYSE", "AU": "ASX"}
+
+
+def discover_mining_symbols(exchange_code: str, limit: int = 250,
+                            offset: int = 0) -> list[dict]:
+    """Real mining-sector symbols from the provider's screener - never a
+    hand-written ticker list (that's how dead symbols got in before)."""
+    import json as _json
+    filters = _json.dumps([["exchange", "=", exchange_code],
+                           ["sector", "=", "Basic Materials"]])
+    rows = _get("screener", {"filters": filters, "limit": min(limit, 500),
+                             "offset": offset, "sort": "market_capitalization.desc"})
+    out: list[dict] = []
+    data = rows.get("data") if isinstance(rows, dict) else rows
+    for r in (data or []):
+        code = (r.get("code") or "").upper()
+        industry = r.get("industry") or ""
+        name = r.get("name") or code
+        if not code:
+            continue
+        if industry and not any(k.lower() in industry.lower()
+                                for k in ("gold", "silver", "copper", "metal",
+                                          "mining", "uranium", "coal", "steel",
+                                          "aluminum")):
+            continue
+        out.append({"ticker": code, "name": name, "industry": industry,
+                    "exchange": DISCOVER_EXCHANGES.get(exchange_code, exchange_code),
+                    "market_cap": r.get("market_capitalization")})
+    return out
