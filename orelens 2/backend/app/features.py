@@ -4883,6 +4883,94 @@ def unlock_coverage(db: Session = Depends(get_db)):
 
 # ==================== TRACK RECORD (computed, not curated) ==================
 
+def _dilution_cohort_study(db, months: int = 12) -> dict:
+    """The proof that needs no waiting: for every company with share-count
+    history, compare how much the share count grew against what the stock did
+    over the same window. Uses data already on file (5y of prices and shares
+    outstanding), so it works today rather than accumulating over months.
+
+    Every qualifying company is included - no selection, no cherry-picking.
+    """
+    from datetime import timedelta as _td
+    span = int(months * 30.4)
+    rows = []
+    for c in db.execute(select(models.Company)).scalars():
+        hist = db.execute(select(models.SharesHistory).where(
+            models.SharesHistory.company_id == c.id)
+            .order_by(models.SharesHistory.as_of)).scalars().all()
+        if len(hist) < 2:
+            continue
+        latest = hist[-1]
+        older = [h for h in hist
+                 if (latest.as_of - h.as_of).days >= span * 0.75]
+        if not older or not older[-1].shares or not latest.shares:
+            continue
+        base = older[-1]
+        share_growth = (latest.shares / base.shares - 1) * 100
+        prices = db.execute(
+            select(models.DailyPrice.day, models.DailyPrice.close)
+            .where(models.DailyPrice.company_id == c.id,
+                   models.DailyPrice.day >= base.as_of - _td(days=10),
+                   models.DailyPrice.day <= latest.as_of + _td(days=10))
+            .order_by(models.DailyPrice.day)).all()
+        px = [p for p in prices if p[1]]
+        if len(px) < 2:
+            continue
+        p0, p1 = px[0][1], px[-1][1]
+        if not p0:
+            continue
+        price_change = (p1 / p0 - 1) * 100
+        rows.append({
+            "ticker": c.ticker, "name": c.name, "exchange": c.exchange,
+            "commodity": c.commodity,
+            "share_growth_pct": round(share_growth, 1),
+            "price_change_pct": round(price_change, 1),
+            "shares_from": int(base.shares), "shares_to": int(latest.shares),
+            "from_date": str(base.as_of), "to_date": str(latest.as_of),
+            "price_from": round(p0, 4), "price_to": round(p1, 4),
+        })
+
+    if len(rows) < 5:
+        return {"companies": len(rows), "enough_data": False}
+
+    def _median(xs):
+        s = sorted(xs)
+        n = len(s)
+        return round(s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2, 1)
+
+    heavy = [r for r in rows if r["share_growth_pct"] >= 25]
+    light = [r for r in rows if r["share_growth_pct"] < 10]
+    worst = sorted([r for r in rows if r["share_growth_pct"] >= 25],
+                   key=lambda r: r["price_change_pct"])[:10]
+
+    out = {
+        "companies": len(rows), "enough_data": True, "window_months": months,
+        "heavy_diluters": {
+            "count": len(heavy),
+            "median_share_growth_pct": _median([r["share_growth_pct"] for r in heavy]) if heavy else None,
+            "median_price_change_pct": _median([r["price_change_pct"] for r in heavy]) if heavy else None,
+            "share_that_fell_pct": (round(len([r for r in heavy if r["price_change_pct"] < 0]) / len(heavy) * 100, 1) if heavy else None),
+        },
+        "disciplined": {
+            "count": len(light),
+            "median_share_growth_pct": _median([r["share_growth_pct"] for r in light]) if light else None,
+            "median_price_change_pct": _median([r["price_change_pct"] for r in light]) if light else None,
+            "share_that_fell_pct": (round(len([r for r in light if r["price_change_pct"] < 0]) / len(light) * 100, 1) if light else None),
+        },
+        "worst_cases": worst,
+        "methodology": (
+            f"For every tracked company with at least two share-count filings "
+            f"spanning ~{months} months, we compare the growth in shares "
+            f"outstanding to the stock's price change over the same period, "
+            f"using our own stored filings and end-of-day prices. Companies "
+            f"are split at 25% share growth ('heavy issuance') and under 10% "
+            f"('disciplined'). Every qualifying company is included - there is "
+            f"no selection. This shows association, not causation, and past "
+            f"patterns do not predict future results."),
+    }
+    return out
+
+
 @router.get("/api/track-record")
 def track_record(window: int = 30, db: Session = Depends(get_db)):
     """What actually happened to holders around the financings we tracked.
@@ -4926,11 +5014,12 @@ def track_record(window: int = 30, db: Session = Depends(get_db)):
             "headline": (fin.headline or "")[:140], "source": fin.source_url,
         })
 
+    cohort = _dilution_cohort_study(db)
     if not cases:
-        return {"cases": 0, "window_days": window,
-                "note": ("Not enough overlapping financing and price history "
-                         "yet to compute an impact study. This page fills in "
-                         "as the record builds.")}
+        return {"cases": 0, "window_days": window, "cohort": cohort,
+                "note": ("Financing-event history is still accumulating; the "
+                         "share-count study below uses filings already on "
+                         "file.")}
 
     changes = sorted(c["change_pct"] for c in cases)
     n = len(changes)
@@ -4939,7 +5028,7 @@ def track_record(window: int = 30, db: Session = Depends(get_db)):
     fell_hard = len([x for x in changes if x <= -20])
     worst = sorted(cases, key=lambda x: x["change_pct"])[:12]
     return {
-        "cases": n, "window_days": window,
+        "cases": n, "window_days": window, "cohort": cohort,
         "median_change_pct": median,
         "average_change_pct": round(sum(changes) / n, 1),
         "share_that_fell_pct": round(fell / n * 100, 1),
