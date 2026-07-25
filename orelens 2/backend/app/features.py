@@ -3373,6 +3373,143 @@ def set_spotlight(body: SpotlightBody, db: Session = Depends(get_db)):
     return {"spotlight_now": body.ticker.upper(), "active": body.active}
 
 
+def _dilution_story(db, c) -> dict:
+    """Turn this company's capital-structure data into a few plain-English
+    sentences a non-technical investor can act on. Pure synthesis of data we
+    already hold - no external calls, no invented facts. Every clause is
+    conditioned on real values; when we don't know something, we say so."""
+    from datetime import date as _date, timedelta as _td
+    g = _grade_of(db, c.id)
+    br = _burn_runway(db, c.id)
+    parts: list[str] = []
+    flags: list[str] = []  # short risk tags for chips
+
+    commodity = (c.commodity or "").lower()
+    kind = commodity if commodity and commodity != "unknown" else "mining"
+    parts.append(f"{c.name} is a {kind} company"
+                 + (f" in {c.jurisdiction}." if c.jurisdiction else "."))
+
+    # ---- runway sentence ----
+    if br:
+        runway = br["runway"]
+        burn_src = br["burn_source"]
+        cash = br["fin"].cash
+        if burn_src == "unknown" or runway is None or runway >= 990:
+            parts.append("Its filings are too thin to measure cash burn "
+                         "reliably, so runway can't be stated with confidence - "
+                         "treat the funding picture as unverified.")
+            flags.append("burn unmeasured")
+        elif runway >= 999 or burn_src == "self-funded":
+            parts.append("It appears self-funded - recent filings show cash "
+                         "holding steady rather than draining, so near-term "
+                         "dilution pressure looks low.")
+        else:
+            cash_txt = (f"about ${cash/1e6:.0f}M in cash" if cash else "limited cash")
+            est = " (estimated from its declining treasury)" if burn_src == "cash-trend" else ""
+            rtxt = ("under 3 months" if runway < 3 else
+                    "roughly " + (f"{runway:.0f} months" if runway < 24
+                                  else f"{runway/12:.0f} years"))
+            parts.append(f"It holds {cash_txt} against its burn rate{est}, "
+                         f"giving {rtxt} of runway.")
+            if runway < 6:
+                parts.append("That short runway is the headline risk: a junior "
+                             "this close to empty usually raises money soon, and "
+                             "raises dilute existing holders.")
+                flags.append("short runway")
+
+        # ---- announced-but-unclosed raise ----
+        if br.get("announced_amt") or br.get("announced_date"):
+            amt = (f"${br['announced_amt']/1e6:.0f}M " if br.get("announced_amt") else "a ")
+            parts.append(f"A raise ({amt}financing) has been announced but not "
+                         "yet closed - watch for pricing, since discounted "
+                         "placements pressure the stock into the close.")
+            flags.append("raise pending")
+        elif br.get("closed_amt"):
+            parts.append(f"It recently closed a ${br['closed_amt']/1e6:.0f}M "
+                         "financing, so the immediate cash need is reduced - "
+                         "but watch for the paper unlocking later.")
+
+    # ---- unlock overhang ----
+    unlocks = db.execute(select(models.Financing).where(
+        models.Financing.company_id == c.id,
+        models.Financing.hold_expiry.is_not(None),
+        models.Financing.hold_expiry >= _date.today(),
+        models.Financing.hold_expiry <= _date.today() + _td(days=120))
+        ).scalars().all()
+    if unlocks:
+        nearest = min(unlocks, key=lambda u: u.hold_expiry)
+        days = (nearest.hold_expiry - _date.today()).days
+        amt = (f"${nearest.amount/1e6:.0f}M of " if nearest.amount else "")
+        parts.append(f"{amt}private-placement paper becomes free-trading in "
+                     f"about {days} days - a known overhang that often caps "
+                     "the price as holders sell.")
+        flags.append(f"unlock in {days}d")
+
+    # ---- promotion ----
+    from .services.attribution import source_names_company as _names_co
+    promos = db.execute(select(models.Promotion).where(
+        models.Promotion.company_id == c.id)
+        .order_by(_desc(models.Promotion.announced)).limit(3)).scalars().all()
+    promos = [p for p in promos if not p.headline or
+              _names_co(p.headline, c.ticker, c.name, c.exchange)]
+    if promos:
+        p = promos[0]
+        paid = f"${p.amount/1e3:.0f}k" if p.amount else "an undisclosed sum"
+        parts.append(f"Note a disclosed promotion: {paid} paid for investor "
+                     "awareness - some of any recent move may be bought "
+                     "attention rather than organic demand.")
+        flags.append("paid promotion")
+
+    # ---- share growth ----
+    hist = db.execute(select(models.SharesHistory).where(
+        models.SharesHistory.company_id == c.id)
+        .order_by(models.SharesHistory.as_of)).scalars().all()
+    if len(hist) >= 2:
+        yr = [h for h in hist if (hist[-1].as_of - h.as_of).days >= 330]
+        if yr and yr[-1].shares:
+            growth = (hist[-1].shares / yr[-1].shares - 1) * 100
+            if growth >= 25:
+                parts.append(f"Share count has grown {growth:.0f}% in the past "
+                             "year - a serial-dilution pattern worth weighing "
+                             "against any upside.")
+                flags.append("heavy issuance")
+            elif growth <= 5:
+                parts.append(f"Encouragingly, shares outstanding grew only "
+                             f"{growth:.0f}% over the past year - disciplined "
+                             "issuance.")
+
+    # ---- closing grade sentence ----
+    grade_line = {
+        "A": "Overall, the dilution structure grades A - clean, with no "
+             "obvious near-term funding pressure.",
+        "B": "Overall, the dilution structure grades B - broadly sound, with "
+             "minor overhang to watch.",
+        "C": "Overall, the dilution structure grades C - mixed; the funding "
+             "picture deserves a close look before sizing a position.",
+        "D": "Overall, the dilution structure grades D - elevated risk that a "
+             "financing or unlock works against holders.",
+        "F": "Overall, the dilution structure grades F - high risk of "
+             "imminent dilution or a paper overhang hitting the stock.",
+    }
+    if g in grade_line:
+        parts.append(grade_line[g])
+
+    return {"ticker": c.ticker, "grade": g, "flags": flags[:5],
+            "story": " ".join(parts),
+            "disclaimer": ("Auto-generated from public filings and disclosures. "
+                           "Can be late or incomplete. Research only, not advice.")}
+
+
+@router.get("/api/dilution-story/{ticker}")
+def dilution_story(ticker: str, db: Session = Depends(get_db)):
+    """Plain-English dilution risk narrative for a ticker."""
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == ticker.upper().strip())).scalar_one_or_none()
+    if not c:
+        return JSONResponse(status_code=404, content={"error": "not tracked"})
+    return _dilution_story(db, c)
+
+
 @router.get("/api/story/{ticker}")
 def sponsor_story(ticker: str, db: Session = Depends(get_db)):
     """The sponsored landing page payload: the company's story A to Z.
