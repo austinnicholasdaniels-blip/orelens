@@ -66,6 +66,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="space-y-2">
                 <a href="/dashboard" className="block text-bone hover:text-assay">The Terminal</a>
                 <a href="/methodology" className="block text-bone hover:text-assay">How Grades Work</a>
+                <a href="/track-record" className="block text-bone hover:text-assay">Track Record</a>
                 <a href="/training" className="block text-bone hover:text-assay">Free Training</a>
                 <a href="/pricing" className="block text-bone hover:text-assay">Pricing</a>
               </div>
