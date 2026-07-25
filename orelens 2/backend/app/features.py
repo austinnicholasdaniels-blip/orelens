@@ -4503,7 +4503,9 @@ def chart_data(tickers: str, days: int = 180, db: Session = Depends(get_db)):
     cutoff = max_day - _td(days=days)
     rows = db.execute(
         select(models.DailyPrice.company_id, models.DailyPrice.day,
-               models.DailyPrice.close, models.DailyPrice.volume)
+               models.DailyPrice.open, models.DailyPrice.high,
+               models.DailyPrice.low, models.DailyPrice.close,
+               models.DailyPrice.volume)
         .where(models.DailyPrice.company_id.in_(companies.keys()),
                models.DailyPrice.day >= cutoff)
         .order_by(models.DailyPrice.company_id, models.DailyPrice.day)).all()
@@ -4512,12 +4514,23 @@ def chart_data(tickers: str, days: int = 180, db: Session = Depends(get_db)):
             models.DilutionGrade.company_id.in_(companies.keys()))).scalars()}
 
     series: dict[str, dict] = {}
-    for cid, day, close, vol in rows:
+    for cid, day, op, hi, lo, close, vol in rows:
         c = companies[cid]
         s = series.setdefault(c.ticker, {
             "name": c.name, "exchange": c.exchange, "commodity": c.commodity,
-            "grade": grades.get(cid), "closes": [], "vols": [], "first_day": str(day)})
+            "grade": grades.get(cid), "closes": [], "ohlc": [], "vols": [],
+            "first_day": str(day)})
         s["closes"].append(round(close, 4) if close else None)
+        # true OHLC when present; else synth a doji-ish candle from close so the
+        # renderer still has 4 values (flagged synthetic for honesty)
+        if op is not None and hi is not None and lo is not None:
+            s["ohlc"].append([round(op, 4), round(hi, 4), round(lo, 4),
+                              round(close, 4) if close else op, 1])
+        elif close:
+            s["ohlc"].append([round(close, 4), round(close, 4),
+                              round(close, 4), round(close, 4), 0])
+        else:
+            s["ohlc"].append(None)
         s["vols"].append(vol or 0)
     for t, s in series.items():
         cl = [x for x in s["closes"] if x]
@@ -4528,3 +4541,45 @@ def chart_data(tickers: str, days: int = 180, db: Session = Depends(get_db)):
                         if len(cl) >= 2 and cl[-2] else None)
         s["last_day"] = str(max_day)
     return series
+
+
+@router.post("/api/admin/backfill-ohlc")
+def backfill_ohlc(limit: int = 40, db: Session = Depends(get_db)):
+    """Fill in open/high/low on historical price rows that only have close.
+    Processes up to `limit` companies per call (re-run until done=true) so a
+    single request never times out on the gateway."""
+    from .services import marketdata
+    need = db.execute(
+        select(models.DailyPrice.company_id).where(
+            models.DailyPrice.open.is_(None)).distinct().limit(limit)).all()
+    cids = [r[0] for r in need]
+    if not cids:
+        return {"done": True, "companies_updated": 0,
+                "note": "All historical rows already have OHLC."}
+    updated = filled = 0
+    for cid in cids:
+        c = db.get(models.Company, cid)
+        if not c:
+            continue
+        try:
+            data = marketdata.fetch_company_data(c.ticker, c.exchange, "2y")
+        except Exception:  # noqa: BLE001
+            continue
+        by_day = {r["date"]: r for r in data.get("prices", [])
+                  if r.get("open") is not None}
+        rows = db.execute(select(models.DailyPrice).where(
+            models.DailyPrice.company_id == cid,
+            models.DailyPrice.open.is_(None))).scalars().all()
+        for row in rows:
+            src = by_day.get(row.day)
+            if src:
+                row.open, row.high, row.low = (src["open"], src["high"], src["low"])
+                filled += 1
+        updated += 1
+    db.commit()
+    remaining = db.execute(
+        select(func.count(func.distinct(models.DailyPrice.company_id)))
+        .where(models.DailyPrice.open.is_(None))).scalar()
+    return {"done": remaining == 0, "companies_updated": updated,
+            "rows_filled": filled, "companies_remaining": remaining,
+            "note": "Re-run until done=true." if remaining else "Complete."}
