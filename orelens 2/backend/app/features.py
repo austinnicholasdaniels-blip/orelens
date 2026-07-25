@@ -4720,3 +4720,239 @@ def backfill_ohlc(limit: int = 40, db: Session = Depends(get_db)):
     return {"done": remaining == 0, "companies_updated": updated,
             "rows_filled": filled, "companies_remaining": remaining,
             "note": "Re-run until done=true." if remaining else "Complete."}
+
+
+# ==================== UNIVERSE EXPANSION (provider-sourced) ==================
+
+@router.post("/api/admin/discover-universe")
+def discover_universe(target: int = 500, dry_run: bool = True,
+                      db: Session = Depends(get_db)):
+    """Grow the universe using the data provider's own mining-sector symbol
+    list. Never a hand-written ticker list: every candidate is a symbol the
+    provider confirms exists, with its industry attached.
+
+    dry_run=true (default) previews what would be added. dry_run=false inserts
+    the company rows; run /api/admin/ingest-batch afterwards (repeatedly) to
+    pull prices and financials for them."""
+    from .services import eodhd as _eod
+    from .services.classify import infer_commodity as _infer
+    have = {t for (t,) in db.execute(select(models.Company.ticker)).all()}
+    room = max(0, target - len(have))
+    if room == 0:
+        return {"done": True, "universe": len(have),
+                "note": f"Already at or above target of {target}."}
+
+    candidates: list[dict] = []
+    per_exchange = max(40, room // 3)
+    for code in ("V", "TO", "CN", "US", "AU"):
+        try:
+            found = _eod.discover_mining_symbols(code, limit=per_exchange)
+        except Exception:  # noqa: BLE001
+            found = []
+        for row in found:
+            if row["ticker"] in have or any(
+                    c["ticker"] == row["ticker"] for c in candidates):
+                continue
+            candidates.append(row)
+        if len(candidates) >= room:
+            break
+    candidates = candidates[:room]
+
+    if dry_run:
+        return {"dry_run": True, "universe_now": len(have),
+                "would_add": len(candidates),
+                "target": target,
+                "sample": [f"{c['ticker']} ({c['exchange']}) {c['name'][:40]}"
+                           for c in candidates[:25]],
+                "note": "Re-run with dry_run=false to add these."}
+
+    added = 0
+    for row in candidates:
+        commodity = _infer(row["name"], "", row["industry"]) or "Unknown"
+        db.add(models.Company(
+            ticker=row["ticker"], exchange=row["exchange"],
+            name=row["name"][:120], commodity=commodity,
+            jurisdiction="", jurisdiction_tier="Tier 1", project_name="",
+            shares_outstanding=0))
+        added += 1
+    db.commit()
+    total = len(have) + added
+    return {"dry_run": False, "added": added, "universe_now": total,
+            "target": target,
+            "next_step": ("Run POST /api/admin/ingest-batch?limit=20 "
+                          "repeatedly until done=true to pull their data.")}
+
+
+@router.post("/api/admin/ingest-batch")
+def ingest_batch(limit: int = 20, db: Session = Depends(get_db)):
+    """Pull prices/financials for companies that don't have them yet.
+    Processes a small batch per call so the gateway never times out.
+    Re-run until done=true."""
+    from .services import marketdata
+    from .jobs.nightly import run_grades
+    priced = {cid for (cid,) in db.execute(
+        select(models.DailyPrice.company_id).distinct()).all()}
+    todo = [c for c in db.execute(select(models.Company)).scalars()
+            if c.id not in priced][:max(1, min(limit, 40))]
+    if not todo:
+        return {"done": True, "remaining": 0, "note": "Every company has data."}
+
+    ok, failed = [], []
+    for c in todo:
+        try:
+            data = marketdata.fetch_company_data(c.ticker, c.exchange, "5y")
+            if not data["prices"]:
+                failed.append(c.ticker)
+                continue
+            if data.get("name") and (not c.name or c.name == c.ticker):
+                c.name = str(data["name"])[:120]
+            if data["shares_outstanding"]:
+                c.shares_outstanding = data["shares_outstanding"]
+            for row in data["prices"]:
+                db.add(models.DailyPrice(
+                    company_id=c.id, day=row["date"], close=row["close"],
+                    open=row.get("open"), high=row.get("high"),
+                    low=row.get("low"), volume=row["volume"]))
+            for sh in data.get("shares_history", []):
+                db.add(models.SharesHistory(company_id=c.id,
+                                            as_of=sh["as_of"],
+                                            shares=sh["shares"]))
+            if data["cash"] and data["monthly_burn"]:
+                db.add(models.FinancialSnapshot(
+                    company_id=c.id, as_of=date.today(), cash=data["cash"],
+                    monthly_burn=data["monthly_burn"],
+                    source_filing="Quarterly statements"))
+            db.commit()
+            ok.append(c.ticker)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            failed.append(c.ticker)
+    try:
+        run_grades(db)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+    remaining = len([c for c in db.execute(select(models.Company)).scalars()
+                     if c.id not in priced and c.ticker not in ok])
+    return {"done": remaining == 0, "ingested": ok, "failed": failed,
+            "remaining": remaining,
+            "note": "Re-run until done=true." if remaining else "Complete."}
+
+
+# ==================== UNLOCK COVERAGE (honest limits) =======================
+
+@router.get("/api/unlock-coverage")
+def unlock_coverage(db: Session = Depends(get_db)):
+    """What the Unlock Calendar can and cannot see. Published openly because
+    an incomplete calendar that implies completeness is worse than none."""
+    fins = db.execute(select(models.Financing)).scalars().all()
+    tracked = len(fins)
+    closed = len([f for f in fins if f.closed])
+    with_unlock = len([f for f in fins if f.hold_expiry])
+    confirmed_close = len([f for f in fins if f.close_date])
+    companies_with = len({f.company_id for f in fins})
+    universe = db.execute(select(func.count(models.Company.id))).scalar() or 0
+    return {
+        "financings_tracked": tracked,
+        "companies_with_financings": companies_with,
+        "universe": universe,
+        "closed_placements": closed,
+        "with_projected_unlock_date": with_unlock,
+        "with_confirmed_close_date": confirmed_close,
+        "what_we_see": [
+            "Private placements and bought deals announced on the newswires "
+            "we scan (GlobeNewswire, Newsfile, CNW and similar).",
+            "Closing announcements, when the company issues one.",
+            "Hold-period expiry projected from the close date using the "
+            "standard four-month Canadian hold.",
+        ],
+        "what_we_cannot_see": [
+            "Placements that are never press-released, or disclosed only in "
+            "a filing we don't parse.",
+            "Deals announced before this platform began tracking a company.",
+            "Non-standard hold periods, early-release exemptions, or "
+            "escrow/lock-up terms that differ from the four-month standard.",
+            "Private secondary transfers between holders.",
+        ],
+        "how_to_read_it": (
+            "Treat the calendar as a floor, not a ceiling: what appears is "
+            "real and dated, but the absence of an unlock is not proof that "
+            "none exists. Always confirm against the issuer's own filings "
+            "before sizing a position around a date."),
+    }
+
+
+# ==================== TRACK RECORD (computed, not curated) ==================
+
+@router.get("/api/track-record")
+def track_record(window: int = 30, db: Session = Depends(get_db)):
+    """What actually happened to holders around the financings we tracked.
+    Computed across EVERY financing with sufficient price history - not a
+    hand-picked highlight reel. Includes the losers and the non-events."""
+    from datetime import timedelta as _td
+    from .services.attribution import source_names_company as _names_co
+    window = max(5, min(window, 90))
+    companies = {c.id: c for c in db.execute(select(models.Company)).scalars()}
+    cases: list[dict] = []
+
+    for fin in db.execute(select(models.Financing)).scalars():
+        c = companies.get(fin.company_id)
+        if not c or not fin.announced:
+            continue
+        # attribution gate: never cite an event that isn't provably theirs
+        if fin.headline and not _names_co(fin.headline, c.ticker, c.name,
+                                          c.exchange):
+            continue
+        d0 = fin.announced
+        prices = db.execute(
+            select(models.DailyPrice.day, models.DailyPrice.close)
+            .where(models.DailyPrice.company_id == c.id,
+                   models.DailyPrice.day >= d0 - _td(days=10),
+                   models.DailyPrice.day <= d0 + _td(days=window + 5))
+            .order_by(models.DailyPrice.day)).all()
+        before = [p for p in prices if p[0] <= d0 and p[1]]
+        after = [p for p in prices if p[0] >= d0 + _td(days=window - 5) and p[1]]
+        if not before or not after:
+            continue
+        p_before, p_after = before[-1][1], after[0][1]
+        if not p_before:
+            continue
+        change = round((p_after / p_before - 1) * 100, 1)
+        cases.append({
+            "ticker": c.ticker, "name": c.name, "exchange": c.exchange,
+            "announced": str(d0), "kind": fin.kind,
+            "amount": fin.amount,
+            "price_before": round(p_before, 4), "price_after": round(p_after, 4),
+            "change_pct": change,
+            "headline": (fin.headline or "")[:140], "source": fin.source_url,
+        })
+
+    if not cases:
+        return {"cases": 0, "window_days": window,
+                "note": ("Not enough overlapping financing and price history "
+                         "yet to compute an impact study. This page fills in "
+                         "as the record builds.")}
+
+    changes = sorted(c["change_pct"] for c in cases)
+    n = len(changes)
+    median = changes[n // 2] if n % 2 else round((changes[n // 2 - 1] + changes[n // 2]) / 2, 1)
+    fell = len([x for x in changes if x < 0])
+    fell_hard = len([x for x in changes if x <= -20])
+    worst = sorted(cases, key=lambda x: x["change_pct"])[:12]
+    return {
+        "cases": n, "window_days": window,
+        "median_change_pct": median,
+        "average_change_pct": round(sum(changes) / n, 1),
+        "share_that_fell_pct": round(fell / n * 100, 1),
+        "share_that_fell_20plus_pct": round(fell_hard / n * 100, 1),
+        "best_change_pct": changes[-1], "worst_change_pct": changes[0],
+        "worst_cases": worst,
+        "methodology": (
+            f"For every financing OreLens tracked, we compare the last close "
+            f"on or before the announcement to the first close about {window} "
+            f"days later, using our own stored end-of-day prices. Every "
+            f"qualifying event is included - winners, losers and non-events. "
+            f"Events whose source headline does not name the issuer are "
+            f"excluded. This measures what happened around these events; it "
+            f"does not prove the financing caused the move, and it is not a "
+            f"prediction of future results."),
+    }
