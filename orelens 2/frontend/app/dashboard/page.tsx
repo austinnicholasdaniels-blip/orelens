@@ -2,6 +2,7 @@
 // build: sidebar-v2
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import UnlockCoverage from "@/components/UnlockCoverage";
 import ChartGrid from "@/components/ChartGrid";
 import DataDisclaimer from "@/components/DataDisclaimer";
 import { getScanner } from "@/lib/api";
@@ -347,6 +348,8 @@ function DashboardInner() {
       )}
 
       {error && <p className="text-hazard text-sm mb-4">{error}</p>}
+
+      {tab === "unlock-calendar" && <UnlockCoverage />}
 
       <div className="flex items-center gap-2 mb-3">
         <span className="text-ash text-xs uppercase tracking-[0.2em] mr-1">View</span>
