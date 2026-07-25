@@ -94,6 +94,26 @@ export default function Methodology() {
         </p>
       </Section>
 
+      <Section k="04b" t="What the Unlock Calendar can and cannot see">
+        <p>
+          An incomplete calendar that implies completeness is worse than no
+          calendar, so we publish the limits openly. We detect placements and
+          bought deals <span className="text-assay">announced on the newswires
+          we scan</span>, plus closing announcements when a company issues one.
+          Hold expiry is <em>projected</em> from the close date using the
+          standard four-month Canadian hold.
+        </p>
+        <p>
+          We cannot see placements that are never press-released, deals
+          announced before we began tracking a company, non-standard hold
+          periods or early-release exemptions, or private transfers between
+          holders. Treat the calendar as a{" "}
+          <span className="text-assay">floor, not a ceiling</span>: what appears
+          is real and dated, but the absence of an unlock is not proof that none
+          exists. Live coverage counts are shown on the Unlock Calendar itself.
+        </p>
+      </Section>
+
       <Section k="05" t="The Assayer">
         <p>
           The Assayer grades a member&apos;s trade idea with AI that reads this
