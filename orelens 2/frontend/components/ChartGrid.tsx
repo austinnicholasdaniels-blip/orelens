@@ -5,7 +5,8 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type Series = {
   name: string; exchange: string; commodity: string;
-  grade: string | null; closes: (number | null)[]; vols: number[];
+  grade: string | null; closes: (number | null)[];
+  ohlc: ([number, number, number, number, number] | null)[]; vols: number[];
   last: number | null; period_pct: number | null; day_pct: number | null;
   last_day: string;
 };
@@ -70,9 +71,51 @@ function Sparkline({ closes, vols, up }: { closes: (number | null)[]; vols: numb
   );
 }
 
+/** Candlestick renderer: green up-candles, red down-candles, wicks, volume. */
+function Candles({ ohlc, vols }: { ohlc: (number[] | null)[]; vols: number[] }) {
+  const bars = ohlc.map((o, i) => ({ o, i })).filter((b) => b.o) as { o: number[]; i: number }[];
+  if (bars.length < 2) {
+    return <div className="h-[86px] flex items-center justify-center text-ash text-xs">no price history</div>;
+  }
+  const W = 260, H = 86, PAD = 3, VOL_H = 16;
+  const highs = bars.map((b) => b.o[1]), lows = bars.map((b) => b.o[2]);
+  const maxY = Math.max(...highs), minY = Math.min(...lows);
+  const spanY = maxY - minY || 1;
+  const plotH = H - VOL_H - PAD * 2;
+  const n = bars.length;
+  const cw = Math.max(1.2, (W - PAD * 2) / n * 0.7);
+  const cx = (i: number) => PAD + ((i + 0.5) / n) * (W - PAD * 2);
+  const sy = (y: number) => PAD + (1 - (y - minY) / spanY) * plotH;
+  const maxVol = Math.max(...vols, 1);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[86px]" preserveAspectRatio="none">
+      {vols.map((v, i) => {
+        const h = (v / maxVol) * VOL_H;
+        return <rect key={`v${i}`} x={cx(i) - cw / 2} y={H - h} width={cw} height={h} fill="#332D25" />;
+      })}
+      {bars.map(({ o, i }, k) => {
+        const [op, hi, lo, cl] = o;
+        const up = cl >= op;
+        const color = up ? "#5FBCA4" : "#DD5F55";
+        const yO = sy(op), yC = sy(cl);
+        const top = Math.min(yO, yC);
+        const bodyH = Math.max(0.8, Math.abs(yC - yO));
+        return (
+          <g key={k}>
+            <line x1={cx(i)} y1={sy(hi)} x2={cx(i)} y2={sy(lo)} stroke={color} strokeWidth="0.6" />
+            <rect x={cx(i) - cw / 2} y={top} width={cw} height={bodyH} fill={color} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function ChartGrid({ tickers }: { tickers: string[] }) {
   const [data, setData] = useState<Record<string, Series>>({});
   const [days, setDays] = useState(180);
+  const [style, setStyle] = useState<"candles" | "line">("candles");
   const [loading, setLoading] = useState(true);
   const shown = tickers.slice(0, 48);
 
@@ -99,8 +142,16 @@ export default function ChartGrid({ tickers }: { tickers: string[] }) {
             {r.label}
           </button>
         ))}
+        <span className="mx-3 text-seam">|</span>
+        {(["candles", "line"] as const).map((sv) => (
+          <button key={sv} onClick={() => setStyle(sv)}
+            className={`text-xs font-mono px-2 py-0.5 rounded-sm border ${
+              style === sv ? "border-assay text-assay" : "border-seam text-ash hover:text-bone"}`}>
+            {sv === "candles" ? "Candles" : "Line"}
+          </button>
+        ))}
         <span className="text-ash text-xs ml-auto">
-          {shown.length} of {tickers.length} shown · gold dashed line = 50-period average
+          {shown.length} of {tickers.length} shown
         </span>
       </div>
 
@@ -122,7 +173,9 @@ export default function ChartGrid({ tickers }: { tickers: string[] }) {
                 )}
               </div>
               <p className="text-bone/85 text-xs truncate mt-0.5">{s.name}</p>
-              <Sparkline closes={s.closes} vols={s.vols} up={up} />
+              {style === "candles"
+                ? <Candles ohlc={s.ohlc} vols={s.vols} />
+                : <Sparkline closes={s.closes} vols={s.vols} up={up} />}
               <div className="flex items-baseline gap-2 mt-1">
                 <span className="font-mono text-bone">{s.last != null ? `$${s.last}` : "—"}</span>
                 {s.day_pct != null && (
