@@ -5,7 +5,7 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type Doc = {
   published: string | null; headline: string; url: string;
-  wire: string; type: string;
+  wire: string; type: string; official?: boolean;
 };
 
 const TYPE_COLOR: Record<string, string> = {
@@ -71,19 +71,24 @@ export default function RecentFilings({ ticker }: { ticker: string }) {
 
       {shown.length === 0 && (
         <p className="text-ash text-sm">
-          No releases on file yet for this company. New ones appear here
-          automatically as they hit the wire.
+          Nothing on file yet for this company. SEC filings and newswire
+          releases appear here automatically as they publish.
         </p>
       )}
 
       <div className="space-y-2.5">
         {shown.map((d, i) => (
           <a key={i} href={d.url} target="_blank" rel="noopener noreferrer"
-             className="block group border-b border-seam/50 last:border-0 pb-2.5 last:pb-0">
+             className={`block group border-b border-seam/50 last:border-0 pb-2.5 last:pb-0 ${
+               d.official ? "border-l-2 border-l-assay/50 pl-2.5" : ""}`}>
             <div className="flex items-baseline gap-2 flex-wrap">
-              <span className={`text-[10px] uppercase tracking-wide border rounded-sm px-1.5 ${TYPE_COLOR[d.type] ?? "border-seam text-ash"}`}>
+              <span className={`text-[10px] uppercase tracking-wide border rounded-sm px-1.5 ${
+                d.official ? "border-assay text-assay" : TYPE_COLOR[d.type] ?? "border-seam text-ash"}`}>
                 {d.type}
               </span>
+              {d.official && (
+                <span className="text-[9px] uppercase tracking-[0.15em] text-assay/80">official</span>
+              )}
               <span className="text-ash font-mono text-xs">{d.published}</span>
               <span className="text-ash text-[10px] ml-auto">{d.wire}</span>
             </div>
