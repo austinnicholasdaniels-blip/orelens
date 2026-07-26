@@ -5,6 +5,7 @@ import { getTicker, fmt } from "@/lib/api";
 import TVChart from "@/components/TVChart";
 import PriceChart from "@/components/PriceChart";
 import DilutionStory from "@/components/DilutionStory";
+import RecentFilings from "@/components/RecentFilings";
 import WatchButton from "@/components/WatchButton";
 import DilutionGauge from "@/components/DilutionGauge";
 import WarrantOverhangMap from "@/components/WarrantOverhangMap";
@@ -217,6 +218,10 @@ function TickerInner({ params }: { params: { symbol: string } }) {
       </div>
 
       <DrillTimeline program={program} results={drill_results} comparison={comparison} />
+      <div className="mt-6">
+        <RecentFilings ticker={company.ticker} />
+      </div>
+
       <DataDisclaimer variant="ticker" />
     </div>
   );
