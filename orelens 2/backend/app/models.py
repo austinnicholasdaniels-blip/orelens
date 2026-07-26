@@ -269,3 +269,20 @@ class TradeIdea(Base):
     grade: Mapped[str | None] = mapped_column(String(2), nullable=True)
     response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SecFiling(Base):
+    """Regulatory filings from SEC EDGAR (US-listed issuers).
+
+    Metadata only - form type, date, title and a link to the official
+    document on sec.gov. OreLens never mirrors filing contents.
+    """
+    __tablename__ = "sec_filings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    cik: Mapped[str] = mapped_column(String(12))
+    form: Mapped[str] = mapped_column(String(20))          # 10-K, 8-K, S-1...
+    filed: Mapped[date] = mapped_column(Date, index=True)
+    title: Mapped[str] = mapped_column(String(400), default="")
+    url: Mapped[str] = mapped_column(String(500), unique=True)
+    accession: Mapped[str] = mapped_column(String(40), default="")
