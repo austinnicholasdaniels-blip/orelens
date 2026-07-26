@@ -246,13 +246,50 @@ async def sync_newswires(db: Session) -> dict:
     return {"feed_items": len(wire_items), "new_stored": stored}
 
 
-async def sync_filings(db: Session) -> None:
-    """For each issuer: pull new MD&A / interim financials, extract cash, burn,
-    and the warrant table via the LLM pass, and persist a snapshot."""
-    # SEDAR+ access is issuer-by-issuer (RSS or commercial mirror) — plug the
-    # per-issuer feed URL into Company metadata when you build the universe.
-    # EDGAR path shown in ingest.fetch_edgar_recent for dual-listed names.
-    log.info("filings sync: wire your SEDAR+ feed source here")
+async def sync_filings(db: Session) -> dict:
+    """Pull recent SEC EDGAR filings for US-listed issuers.
+
+    Metadata only (form, date, link to sec.gov). Canadian issuers file on
+    SEDAR+, which has no free public feed - those companies show newswire
+    releases instead, and the UI says so.
+    """
+    from ..models import SecFiling
+    from ..services import edgar
+
+    mapping = edgar.cik_map()
+    if not mapping:
+        log.info("edgar: ticker->CIK map unavailable this run")
+        return {"checked": 0, "added": 0, "note": "cik map unavailable"}
+
+    have = {u for (u,) in db.execute(select(SecFiling.url)).all()}
+    checked = added = matched = 0
+    for c in db.execute(select(Company)).scalars():
+        if not edgar.is_us_listed(c.exchange):
+            continue
+        cik = mapping.get(c.ticker.upper())
+        if not cik:
+            continue
+        matched += 1
+        checked += 1
+        for f in edgar.recent_filings(cik, limit=20):
+            if f["url"] in have:
+                continue
+            try:
+                with db.begin_nested():
+                    db.add(SecFiling(
+                        company_id=c.id, cik=cik, form=f["form"],
+                        filed=f["filed"], title=f["title"][:400],
+                        url=f["url"][:500], accession=f["accession"]))
+                    db.flush()
+                have.add(f["url"])
+                added += 1
+            except Exception:  # noqa: BLE001
+                continue
+        edgar.polite_pause()
+    db.commit()
+    log.info("edgar: %s US-listed issuers matched, %s filings added",
+             matched, added)
+    return {"checked": checked, "matched": matched, "added": added}
 
 
 def run_grades(db: Session) -> None:
