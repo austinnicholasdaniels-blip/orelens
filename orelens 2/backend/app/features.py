@@ -5100,10 +5100,11 @@ def company_documents(ticker: str, limit: int = 25,
         models.Company.ticker == t)).scalar_one_or_none()
     if not c:
         return JSONResponse(status_code=404, content={"error": "not tracked"})
+    cap = max(5, min(limit, 60))
     rows = db.execute(select(models.PressRelease).where(
         models.PressRelease.company_id == c.id)
         .order_by(_desc(models.PressRelease.published))
-        .limit(max(5, min(limit, 60)))).scalars().all()
+        .limit(cap)).scalars().all()
     docs = []
     withheld = 0
     for r in rows:
@@ -5116,11 +5117,43 @@ def company_documents(ticker: str, limit: int = 25,
             "url": r.url,
             "wire": r.wire,
             "type": _doc_type(r.headline),
+            "official": False,
         })
+
+    # official SEC filings sit alongside the wire releases
+    for s in db.execute(select(models.SecFiling).where(
+            models.SecFiling.company_id == c.id)
+            .order_by(_desc(models.SecFiling.filed)).limit(cap)).scalars():
+        docs.append({
+            "published": s.filed.isoformat() if s.filed else None,
+            "headline": (f"{s.form} - {s.title}" if s.title and
+                         s.title.upper() != s.form.upper() else s.form),
+            "url": s.url,
+            "wire": "SEC EDGAR",
+            "type": f"Filing · {s.form}",
+            "official": True,
+        })
+    docs.sort(key=lambda d: d["published"] or "", reverse=True)
+    docs = docs[:cap]
     return {"ticker": t, "name": c.name, "count": len(docs),
             "withheld_unattributed": withheld, "documents": docs,
-            "source_note": ("Newswire releases as published by the issuer. "
-                            "OreLens links to the original - it does not "
-                            "reproduce it. Regulatory filings on SEDAR+ are "
-                            "not mirrored here; check the issuer's profile "
-                            "for the official record.")}
+            "source_note": ("Official SEC filings (US-listed issuers) and "
+                            "newswire releases as published by the issuer. "
+                            "OreLens links to originals and does not reproduce "
+                            "them. Canadian issuers file on SEDAR+, which has "
+                            "no public feed - check the issuer's SEDAR+ "
+                            "profile for their official record.")}
+
+
+@router.post("/api/admin/sync-edgar")
+def sync_edgar_now(db: Session = Depends(get_db)):
+    """Pull SEC EDGAR filings for US-listed issuers right now (also runs
+    nightly). Metadata and links only."""
+    import asyncio
+    from .jobs.nightly import sync_filings
+    try:
+        res = asyncio.run(sync_filings(db))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)[:200]}
+    total = db.execute(select(func.count(models.SecFiling.id))).scalar()
+    return {"ok": True, "run": res, "filings_on_file": total}
