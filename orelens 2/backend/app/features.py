@@ -5063,3 +5063,64 @@ def track_record(db: Session = Depends(get_db)):
     return {"drawdown": _drawdown_study(db),
             "cohort": _dilution_cohort_study(db)}
 
+
+
+DOC_TYPES = [
+    ("Financing", ("private placement", "bought deal", "offering", "financing",
+                   "flow-through", "subscription receipt", "raise", "unit")),
+    ("Drill Results", ("drill", "assay", "intercept", "intersect", "hole",
+                       "g/t", "grades")),
+    ("Resource / Study", ("resource estimate", "mineral resource", "pea",
+                          "feasibility", "economic assessment", "reserve")),
+    ("Production", ("production", "pour", "throughput", "mill", "commercial")),
+    ("Corporate", ("appoint", "director", "ceo", "management", "board",
+                   "grant", "option", "agm", "annual meeting")),
+    ("Promotion / IR", ("investor awareness", "investor relations",
+                        "marketing agreement", "engages")),
+]
+
+
+def _doc_type(headline: str) -> str:
+    h = (headline or "").lower()
+    for label, terms in DOC_TYPES:
+        if any(t in h for t in terms):
+            return label
+    return "Release"
+
+
+@router.get("/api/company-documents/{ticker}")
+def company_documents(ticker: str, limit: int = 25,
+                      db: Session = Depends(get_db)):
+    """Recent releases and filings for one issuer: headline, date, wire and a
+    link to the original. Only documents whose headline names this company are
+    returned - the same attribution gate used everywhere else."""
+    from .services.attribution import source_names_company as _names_co
+    t = ticker.upper().strip()
+    c = db.execute(select(models.Company).where(
+        models.Company.ticker == t)).scalar_one_or_none()
+    if not c:
+        return JSONResponse(status_code=404, content={"error": "not tracked"})
+    rows = db.execute(select(models.PressRelease).where(
+        models.PressRelease.company_id == c.id)
+        .order_by(_desc(models.PressRelease.published))
+        .limit(max(5, min(limit, 60)))).scalars().all()
+    docs = []
+    withheld = 0
+    for r in rows:
+        if r.headline and not _names_co(r.headline, c.ticker, c.name, c.exchange):
+            withheld += 1
+            continue
+        docs.append({
+            "published": r.published.date().isoformat() if r.published else None,
+            "headline": r.headline,
+            "url": r.url,
+            "wire": r.wire,
+            "type": _doc_type(r.headline),
+        })
+    return {"ticker": t, "name": c.name, "count": len(docs),
+            "withheld_unattributed": withheld, "documents": docs,
+            "source_note": ("Newswire releases as published by the issuer. "
+                            "OreLens links to the original - it does not "
+                            "reproduce it. Regulatory filings on SEDAR+ are "
+                            "not mirrored here; check the issuer's profile "
+                            "for the official record.")}
