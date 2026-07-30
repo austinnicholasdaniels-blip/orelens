@@ -21,6 +21,7 @@ const BULLISH_TABS = [
 ] as const;
 
 const RISK_TABS = [
+  { id: "short-setups", label: "Short Setups" },
   { id: "dilution-risk", label: "Dilution Risk" },
   { id: "burn-league", label: "Burn League" },
   { id: "serial-raisers", label: "Serial Raisers" },
@@ -39,6 +40,13 @@ const COMMODITIES = ["Gold", "Silver", "Copper", "Nickel", "Lithium"];
 const TIERS = ["Tier 1", "High Risk"];
 
 const COLUMNS: Record<string, { key: string; label: string }[]> = {
+  "short-setups": [
+    { key: "ticker", label: "Ticker" }, { key: "name", label: "Company" },
+    { key: "price", label: "Price" }, { key: "gain_pct", label: "Run-Up %" },
+    { key: "volume", label: "Avg Volume" }, { key: "runway_m", label: "Runway (mo)" },
+    { key: "why", label: "Why It Qualifies" },
+    { key: "setup_score", label: "Setup Score" }, { key: "grade", label: "Grade" },
+  ],
   "all-stocks": [
     { key: "ticker", label: "Ticker" }, { key: "name", label: "Company" },
     { key: "price", label: "Price" }, { key: "change_pct", label: "Day %" },
@@ -105,6 +113,7 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 };
 
 const DESCRIPTIONS: Record<string, string> = {
+  "short-setups": "Names that ran hard on real volume while carrying a capital-structure problem underneath: up 10%+ over the last week, 200,000+ average daily shares, and at least one dilution flag - weak grade, short runway, an announced raise, paper unlocking inside 90 days, or a disclosed promotion. Setup Score weights the size of the run-up against how much risk sits beneath it. A clean company that simply rallied does not appear here.",
   "all-stocks": "Every company OreLens tracks, with the latest close and day-over-day move, sorted by the day's biggest gainers. Click any column header to re-sort, or any ticker for its full capital-structure profile.",
   "value-momentum": "Only companies holding an A or B dilution grade qualify. Scores stack cheap ounces (low EV per resource ounce), volatility contraction with drying volume during an active drill program, and open-market insider buying in the last 60 days - funded stories getting quieter while insiders step in.",
   "most-dilutive": "Ranks companies by the largest quarter-over-quarter percentage increase in shares outstanding, straight from quarterly filings. Shows exactly how many new shares hit the register and the total growth across the tracked window.",
