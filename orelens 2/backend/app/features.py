@@ -3384,10 +3384,9 @@ def _dilution_story(db, c) -> dict:
     parts: list[str] = []
     flags: list[str] = []  # short risk tags for chips
 
-    commodity = (c.commodity or "").lower()
-    kind = commodity if commodity and commodity != "unknown" else "mining"
-    parts.append(f"{c.name} is a {kind} company"
-                 + (f" in {c.jurisdiction}." if c.jurisdiction else "."))
+    # Deliberately no commodity/sector claim here: our classification can be
+    # coarse, and a wrong "gold company" line poisons trust in the numbers
+    # that follow. This section speaks only to capital structure.
 
     # ---- runway sentence ----
     if br:
@@ -3395,22 +3394,23 @@ def _dilution_story(db, c) -> dict:
         burn_src = br["burn_source"]
         cash = br["fin"].cash
         if burn_src == "unknown" or runway is None or runway >= 990:
-            parts.append("Its filings are too thin to measure cash burn "
+            parts.append(f"{c.name}: filings are too thin to measure cash burn "
                          "reliably, so runway can't be stated with confidence - "
                          "treat the funding picture as unverified.")
             flags.append("burn unmeasured")
         elif runway >= 999 or burn_src == "self-funded":
-            parts.append("It appears self-funded - recent filings show cash "
+            parts.append(f"{c.name} appears self-funded - recent filings show cash "
                          "holding steady rather than draining, so near-term "
                          "dilution pressure looks low.")
         else:
             cash_txt = (f"about ${cash/1e6:.0f}M in cash" if cash else "limited cash")
+            # lead with the company name since the intro line is gone
             est = " (estimated from its declining treasury)" if burn_src == "cash-trend" else ""
             rtxt = ("under 3 months" if runway < 3 else
                     "roughly " + (f"{runway:.0f} months" if runway < 24
                                   else f"{runway/12:.0f} years"))
-            parts.append(f"It holds {cash_txt} against its burn rate{est}, "
-                         f"giving {rtxt} of runway.")
+            parts.append(f"{c.name} holds {cash_txt} against its burn "
+                         f"rate{est}, giving {rtxt} of runway.")
             if runway < 6:
                 parts.append("That short runway is the headline risk: a junior "
                              "this close to empty usually raises money soon, and "
@@ -5157,3 +5157,110 @@ def sync_edgar_now(db: Session = Depends(get_db)):
         return {"ok": False, "error": str(exc)[:200]}
     total = db.execute(select(func.count(models.SecFiling.id))).scalar()
     return {"ok": True, "run": res, "filings_on_file": total}
+
+
+@router.get("/api/scanners/short-setups")
+def short_setups(min_gain: float = 10.0, min_volume: int = 200000,
+                 days: int = 7, db: Session = Depends(get_db)):
+    """Overextended into dilution: names that spiked recently, trade real
+    volume, and carry a capital-structure problem underneath the move.
+
+    Defaults: up 10%+ over the last 7 sessions, 200k+ average daily shares.
+    Ranked by how much risk sits under the spike - grade, runway, pending
+    raise, upcoming unlock, disclosed promotion.
+    """
+    from datetime import timedelta as _td
+    out = []
+    max_day = db.execute(select(func.max(models.DailyPrice.day))).scalar()
+    if not max_day:
+        return []
+    lookback = max_day - _td(days=max(3, min(days, 60)) + 4)
+
+    for c in db.execute(select(models.Company)).scalars():
+        px = db.execute(
+            select(models.DailyPrice.day, models.DailyPrice.close,
+                   models.DailyPrice.volume)
+            .where(models.DailyPrice.company_id == c.id,
+                   models.DailyPrice.day >= lookback - _td(days=60))
+            .order_by(models.DailyPrice.day)).all()
+        rows = [(d, cl, v) for d, cl, v in px if cl]
+        if len(rows) < 10:
+            continue
+        window = [r for r in rows if r[0] >= lookback]
+        if len(window) < 3:
+            continue
+        start_px, last_px = window[0][1], rows[-1][1]
+        if not start_px:
+            continue
+        gain = (last_px / start_px - 1) * 100
+        if gain < min_gain:
+            continue
+        vols = [r[2] or 0 for r in rows[-20:]]
+        avg_vol = sum(vols) / max(1, len(vols))
+        if avg_vol < min_volume:
+            continue
+
+        grade = _grade_of(db, c.id)
+        br = _burn_runway(db, c.id)
+        runway = (br["runway"] if br and br["runway"] and br["runway"] < 900
+                  else None)
+        raise_pending = bool(br and (br.get("announced_amt") or
+                                     br.get("announced_date")))
+        unlocks = db.execute(select(models.Financing).where(
+            models.Financing.company_id == c.id,
+            models.Financing.hold_expiry.is_not(None),
+            models.Financing.hold_expiry >= date.today(),
+            models.Financing.hold_expiry <= date.today() + _td(days=90))
+            ).scalars().all()
+        unlock_days = (min((u.hold_expiry - date.today()).days
+                           for u in unlocks) if unlocks else None)
+        from .services.attribution import source_names_company as _names_co
+        promos = [p for p in db.execute(select(models.Promotion).where(
+            models.Promotion.company_id == c.id)).scalars()
+            if not p.headline or _names_co(p.headline, c.ticker, c.name,
+                                           c.exchange)]
+
+        # "meat on the bone": spike size + how bad the structure underneath is
+        score = min(40, gain * 0.8)
+        reasons = []
+        if grade in ("D", "F"):
+            score += 25
+            reasons.append(f"grade {grade}")
+        elif grade == "C":
+            score += 10
+            reasons.append("grade C")
+        if runway is not None and runway < 6:
+            score += 20
+            reasons.append(f"{runway:.0f}mo runway")
+        elif runway is not None and runway < 12:
+            score += 8
+            reasons.append(f"{runway:.0f}mo runway")
+        if raise_pending:
+            score += 15
+            reasons.append("raise announced")
+        if unlock_days is not None:
+            score += 15 if unlock_days <= 45 else 8
+            reasons.append(f"unlock {unlock_days}d")
+        if promos:
+            score += 12
+            reasons.append("paid promotion")
+        if not reasons:
+            continue          # a clean company that rallied is not a setup
+
+        out.append({
+            "ticker": c.ticker, "name": c.name, "exchange": c.exchange,
+            "price": round(last_px, 4),
+            "gain_pct": round(gain, 1),
+            "avg_volume": int(avg_vol), "volume": int(avg_vol),
+            "dollar_volume": int(avg_vol * last_px),
+            "runway_m": round(runway, 1) if runway is not None else None,
+            "raise_pending": "yes" if raise_pending else "",
+            "unlock_days": unlock_days,
+            "promotion": "yes" if promos else "",
+            "setup_score": round(score),
+            "why": ", ".join(reasons),
+            "grade": grade,
+        })
+
+    out.sort(key=lambda r: -r["setup_score"])
+    return _drop_stale(db, out)
