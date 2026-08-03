@@ -13,7 +13,7 @@ export default function TVChart({ ticker, exchange }: { ticker: string; exchange
     new URLSearchParams({
       symbol,
       interval: "D",
-      theme: "dark",
+      theme: "light",
       style: "1",            // candles
       locale: "en",
       hide_top_toolbar: "0",
@@ -21,8 +21,8 @@ export default function TVChart({ ticker, exchange }: { ticker: string; exchange
       allow_symbol_change: "0",
       save_image: "0",
       withdateranges: "1",
-      backgroundColor: "#1A1E1C",
-      gridColor: "#2A302D",
+      backgroundColor: "#FFFFFF",
+      gridColor: "#E3E9F3",
     }).toString();
 
   return (
