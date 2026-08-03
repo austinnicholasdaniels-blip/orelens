@@ -50,7 +50,7 @@ function Sparkline({ closes, vols, up }: { closes: (number | null)[]; vols: numb
   }
 
   const maxVol = Math.max(...vols, 1);
-  const stroke = up ? "#5FBCA4" : "#DD5F55";
+  const stroke = up ? "#0B8F63" : "#C42B2B";
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[86px]" preserveAspectRatio="none">
@@ -62,11 +62,11 @@ function Sparkline({ closes, vols, up }: { closes: (number | null)[]; vols: numb
       </defs>
       {vols.map((v, i) => {
         const h = (v / maxVol) * VOL_H;
-        return <rect key={i} x={sx(i) - 0.6} y={H - h} width="1.2" height={h} fill="#332D25" />;
+        return <rect key={i} x={sx(i) - 0.6} y={H - h} width="1.2" height={h} fill="#CFD9E8" />;
       })}
       <path d={area} fill={`url(#g-${up ? "u" : "d"})`} />
       <path d={line} fill="none" stroke={stroke} strokeWidth="1.5" />
-      {ma.length > 1 && <path d={ma.join(" ")} fill="none" stroke="#E3B356" strokeWidth="1" strokeDasharray="3 2" opacity="0.75" />}
+      {ma.length > 1 && <path d={ma.join(" ")} fill="none" stroke="#1E4FD8" strokeWidth="1" strokeDasharray="3 2" opacity="0.75" />}
     </svg>
   );
 }
