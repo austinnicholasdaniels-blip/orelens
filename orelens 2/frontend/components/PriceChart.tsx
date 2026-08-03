@@ -14,8 +14,8 @@ function sma(data: { time: string; value: number }[], n: number) {
   return out;
 }
 
-const UP = "#58B09C";
-const DOWN = "#D4574E";
+const UP = "#0B8F63";
+const DOWN = "#C42B2B";
 
 export default function PriceChart({ prices }: { prices: Px[] }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -24,10 +24,10 @@ export default function PriceChart({ prices }: { prices: Px[] }) {
     if (!ref.current || !prices?.length) return;
     const chart = createChart(ref.current, {
       height: 320,
-      layout: { background: { type: ColorType.Solid, color: "#1A1E1C" }, textColor: "#8D958F" },
-      grid: { vertLines: { color: "#2A302D" }, horzLines: { color: "#2A302D" } },
-      rightPriceScale: { borderColor: "#2A302D" },
-      timeScale: { borderColor: "#2A302D" },
+      layout: { background: { type: ColorType.Solid, color: "#FFFFFF" }, textColor: "#5C6B85" },
+      grid: { vertLines: { color: "#EDF1F8" }, horzLines: { color: "#EDF1F8" } },
+      rightPriceScale: { borderColor: "#CFD9E8" },
+      timeScale: { borderColor: "#CFD9E8" },
     });
 
     // candles: legacy rows without OHLC render as flat candles at the close
@@ -57,10 +57,10 @@ export default function PriceChart({ prices }: { prices: Px[] }) {
     // moving averages over closes
     const closes = prices.map((p) => ({ time: p.time, value: p.value }));
     if (closes.length >= 50)
-      chart.addLineSeries({ color: "#E8B44A", lineWidth: 1, lineStyle: LineStyle.Solid,
+      chart.addLineSeries({ color: "#1E4FD8", lineWidth: 1, lineStyle: LineStyle.Solid,
         priceLineVisible: false, lastValueVisible: false }).setData(sma(closes, 50));
     if (closes.length >= 200)
-      chart.addLineSeries({ color: "#8D958F", lineWidth: 1, lineStyle: LineStyle.Dashed,
+      chart.addLineSeries({ color: "#8FA0BC", lineWidth: 1, lineStyle: LineStyle.Dashed,
         priceLineVisible: false, lastValueVisible: false }).setData(sma(closes, 200));
 
     chart.timeScale().fitContent();
