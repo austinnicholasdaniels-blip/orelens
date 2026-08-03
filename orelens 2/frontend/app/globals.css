@@ -23,19 +23,20 @@ table.core-tray tr:hover td { @apply bg-tray; }
     position: sticky;
     left: 0;
     z-index: 5;
-    background: #161917;
-    box-shadow: 2px 0 0 rgba(42, 48, 45, 0.9);
+    background: #FFFFFF;
+    box-shadow: 2px 0 0 rgba(207, 217, 232, 0.9);
   }
-  table.core-tray tr:hover td:first-child { background: #1a1e1c; }
+  table.core-tray tr:hover td:first-child { background: #EEF3FB; }
 }
 
-/* Minted gold: every primary CTA renders as bullion, not flat mustard.
-   Targets buttons/links only - gold badges (spans) stay flat. */
+/* Polished royal blue: every primary CTA renders with a glass highlight. */
 a.bg-assay, button.bg-assay {
-  background-image: linear-gradient(180deg, #F0CB78 0%, #E3B356 45%, #C6923A 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 244, 214, 0.55),
-              0 2px 10px rgba(227, 179, 86, 0.22);
-  text-shadow: 0 1px 0 rgba(255, 248, 226, 0.35);
+  background-image: linear-gradient(180deg, #4A7BF0 0%, #1E4FD8 48%, #12329B 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45),
+              inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+              0 4px 14px rgba(30, 79, 216, 0.30);
+  color: #FFFFFF !important;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.22);
 }
 a.bg-assay:hover, button.bg-assay:hover {
   filter: brightness(1.06);
@@ -44,15 +45,17 @@ a.bg-assay:hover, button.bg-assay:hover {
 
 /* Hero glow: a soft gold light source so the page feels lit, not void */
 .hero-glow {
-  background: radial-gradient(ellipse 65% 55% at 50% -5%,
-              rgba(227, 179, 86, 0.12), rgba(227, 179, 86, 0.04) 45%,
-              transparent 72%);
+  background:
+    radial-gradient(ellipse 70% 60% at 50% -8%,
+      rgba(30, 79, 216, 0.13), rgba(30, 79, 216, 0.05) 42%, transparent 72%),
+    linear-gradient(180deg, #FFFFFF 0%, #F4F7FC 100%);
 }
 
 /* Highlighted sales phrases: gold marker effect */
 .hl {
-  background: linear-gradient(180deg, rgba(227, 179, 86, 0.0) 55%, rgba(227, 179, 86, 0.32) 55%);
-  color: #F0CB78;
+  background: linear-gradient(180deg, rgba(30, 79, 216, 0.0) 55%, rgba(30, 79, 216, 0.20) 55%);
+  color: #12329B;
+  font-weight: 600;
   padding: 0 2px;
 }
 
@@ -63,7 +66,7 @@ a.bg-assay:hover, button.bg-assay:hover {
   position: absolute;
   inset: 0;
   background: linear-gradient(105deg, transparent 40%,
-              rgba(240, 203, 120, 0.16) 50%, transparent 60%);
+              rgba(255, 255, 255, 0.85) 50%, transparent 60%);
   background-size: 250% 100%;
   animation: promo-sweep 3.2s ease-in-out infinite;
   pointer-events: none;
@@ -75,11 +78,11 @@ a.bg-assay:hover, button.bg-assay:hover {
 }
 .promo-pulse {
   animation: promo-breathe 2.2s ease-in-out infinite;
-  box-shadow: 0 0 0 0 rgba(227, 179, 86, 0.45);
+  box-shadow: 0 0 0 0 rgba(30, 79, 216, 0.40);
 }
 @keyframes promo-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(227, 179, 86, 0.45); }
-  50%      { box-shadow: 0 0 14px 2px rgba(227, 179, 86, 0.35); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(30, 79, 216, 0.40); }
+  50%      { box-shadow: 0 0 14px 2px rgba(30, 79, 216, 0.30); }
 }
 .promo-arrow { animation: promo-nudge 1.4s ease-in-out infinite; }
 @keyframes promo-nudge {
@@ -91,3 +94,26 @@ a.bg-assay:hover, button.bg-assay:hover {
 }
 
 .promo-shimmer:hover { filter: brightness(1.25); }
+
+/* --- Polished surfaces: cards read as brushed metal, not flat paper --- */
+.bg-tray {
+  background-image: linear-gradient(180deg, #FFFFFF 0%, #F7FAFF 55%, #EFF4FC 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9),
+              0 1px 2px rgba(14, 30, 60, 0.06),
+              0 6px 18px rgba(14, 30, 60, 0.05);
+}
+
+/* silver rule under the header + section edges */
+.border-seam { border-color: #CFD9E8; }
+
+/* grade chips and metal badges get a subtle gloss */
+.assay-stamp {
+  background-image: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(233,239,249,0.9));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 1px 2px rgba(14,30,60,0.08);
+}
+
+/* table polish for a light ground */
+table.core-tray tr:hover td { background: #EEF3FB !important; }
+
+/* selection in brand blue */
+::selection { background: rgba(30, 79, 216, 0.18); }
